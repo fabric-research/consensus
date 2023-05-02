@@ -40,7 +40,7 @@ type Pruner interface {
 type RequestsTimer interface {
 	StopTimers()
 	RestartTimers()
-	RemoveRequest(request types.RequestInfo) error
+	RemoveRequests(request ...types.RequestInfo) error
 }
 
 type change struct {
@@ -1149,10 +1149,9 @@ func (v *ViewChanger) deliverDecision(proposal types.Proposal, signatures []type
 		v.Checkpoint.Set(proposal, signatures)
 	}
 	requests := v.Verifier.RequestsFromProposal(proposal)
-	for _, reqInfo := range requests {
-		if err := v.RequestsTimer.RemoveRequest(reqInfo); err != nil {
-			v.Logger.Warnf("Error during remove of request %s from the pool, err: %v", reqInfo, err)
-		}
+
+	if err := v.RequestsTimer.RemoveRequests(requests...); err != nil {
+		v.Logger.Panicf("Error during removal of requests: %v of request %s from the pool, err: %v", err)
 	}
 	v.Pruner.MaybePruneRevokedRequests()
 }
@@ -1296,11 +1295,11 @@ func (v *ViewChanger) Decide(proposal types.Proposal, signatures []types.Signatu
 		// Only set the proposal in case it is later than the already known checkpoint.
 		v.Checkpoint.Set(proposal, signatures)
 	}
-	for _, reqInfo := range requests {
-		if err := v.RequestsTimer.RemoveRequest(reqInfo); err != nil {
-			v.Logger.Warnf("Error during remove of request %s from the pool, err: %v", reqInfo, err)
-		}
+
+	if err := v.RequestsTimer.RemoveRequests(requests...); err != nil {
+		v.Logger.Panicf("Error during removal of requests: %v", err)
 	}
+
 	v.Pruner.MaybePruneRevokedRequests()
 	v.inFlightDecideChan <- struct{}{}
 }

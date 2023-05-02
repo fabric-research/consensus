@@ -6,6 +6,7 @@
 package bft
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -34,32 +35,11 @@ func NewBatchBuilder(pool RequestPool, submittedChan chan struct{}, maxMsgCount 
 	return b
 }
 
-// NextBatch returns the next batch of requests to be proposed.
-// The method returns as soon as the batch is full, in terms of request count or total size, or after a timeout.
-// The method may block.
 func (b *BatchBuilder) NextBatch() [][]byte {
-	currBatch, full := b.pool.NextRequests(b.maxMsgCount, b.maxSizeBytes, true)
-	if full {
-		return currBatch
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), b.batchTimeout)
+	defer cancel()
 
-	timeout := time.After(b.batchTimeout) // TODO use task-scheduler based on logical time
-
-	for {
-		select {
-		case <-b.closeChan:
-			return nil
-		case <-timeout:
-			currBatch, _ = b.pool.NextRequests(b.maxMsgCount, b.maxSizeBytes, false)
-			return currBatch
-		case <-b.submittedChan:
-			// there is a possibility to extend the current batch
-			currBatch, full = b.pool.NextRequests(b.maxMsgCount, b.maxSizeBytes, true)
-			if full {
-				return currBatch
-			}
-		}
-	}
+	return b.pool.NextRequests(ctx)
 }
 
 // Close closes the close channel to stop NextBatch

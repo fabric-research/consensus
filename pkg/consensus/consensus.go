@@ -6,6 +6,9 @@
 package consensus
 
 import (
+	"github.com/SmartBFT-Go/consensus/pkg/api"
+	"github.com/SmartBFT-Go/consensus/pkg/mem"
+	"github.com/SmartBFT-Go/consensus/pkg/metrics/disabled"
 	"sort"
 	"strings"
 	"sync"
@@ -14,7 +17,6 @@ import (
 
 	algorithm "github.com/SmartBFT-Go/consensus/internal/bft"
 	bft "github.com/SmartBFT-Go/consensus/pkg/api"
-	"github.com/SmartBFT-Go/consensus/pkg/metrics/disabled"
 	"github.com/SmartBFT-Go/consensus/pkg/types"
 	protos "github.com/SmartBFT-Go/consensus/smartbftprotos"
 	"github.com/golang/protobuf/proto"
@@ -37,7 +39,7 @@ type Consensus struct {
 	RequestInspector   bft.RequestInspector
 	Synchronizer       bft.Synchronizer
 	Logger             bft.Logger
-	MetricsProvider    *bft.CustomerProvider
+	MetricsProvider    *api.CustomerProvider
 	Metadata           *protos.ViewMetadata
 	LastProposal       types.Proposal
 	LastSignatures     []types.Signature
@@ -47,7 +49,7 @@ type Consensus struct {
 	submittedChan chan struct{}
 	inFlight      *algorithm.InFlightData
 	checkpoint    *types.Checkpoint
-	Pool          *algorithm.Pool
+	Pool          *mem.Pool
 	viewChanger   *algorithm.ViewChanger
 	controller    *algorithm.Controller
 	collector     *algorithm.StateCollector
@@ -109,7 +111,7 @@ func (c *Consensus) Start() error {
 	}
 
 	if c.MetricsProvider == nil {
-		c.MetricsProvider = bft.NewCustomerProvider(&disabled.Provider{})
+		c.MetricsProvider = api.NewCustomerProvider(&disabled.Provider{})
 	}
 
 	c.consensusDone.Add(1)
@@ -134,17 +136,21 @@ func (c *Consensus) Start() error {
 	c.checkpoint.Set(c.LastProposal, c.LastSignatures)
 
 	c.createComponents()
-	opts := algorithm.PoolOptions{
-		QueueSize:         int64(c.Config.RequestPoolSize),
-		ForwardTimeout:    c.Config.RequestForwardTimeout,
-		ComplainTimeout:   c.Config.RequestComplainTimeout,
-		AutoRemoveTimeout: c.Config.RequestAutoRemoveTimeout,
-		RequestMaxBytes:   c.Config.RequestMaxBytes,
-		SubmitTimeout:     c.Config.RequestPoolSubmitTimeout,
-		MetricsProvider:   c.MetricsProvider,
-	}
 	c.submittedChan = make(chan struct{}, 1)
-	c.Pool = algorithm.NewPool(c.Logger, c.RequestInspector, c.controller, opts, c.submittedChan)
+	c.Pool = &mem.Pool{
+		Logger: c.Logger,
+		Time:   c.Scheduler,
+		Options: mem.PoolOptions{
+			ForwardTimeout:    c.Config.RequestForwardTimeout,
+			ComplainTimeout:   c.Config.RequestComplainTimeout,
+			AutoRemoveTimeout: c.Config.RequestAutoRemoveTimeout,
+			RequestMaxBytes:   c.Config.RequestMaxBytes,
+			SubmitTimeout:     c.Config.RequestPoolSubmitTimeout,
+			BatchMaxSize:      int(c.Config.RequestBatchMaxCount),
+		},
+	}
+	c.Pool.Init()
+
 	c.continueCreateComponents()
 
 	c.Logger.Debugf("Application started with view %d, seq %d, and decisions %d", c.Metadata.ViewId, c.Metadata.LatestSequence, c.Metadata.DecisionsInView)
@@ -217,7 +223,7 @@ func (c *Consensus) reconfig(reconfig types.Reconfig) {
 	c.setNodes(reconfig.CurrentNodes)
 
 	c.createComponents()
-	opts := algorithm.PoolOptions{
+	opts := mem.PoolOptions{
 		ForwardTimeout:    c.Config.RequestForwardTimeout,
 		ComplainTimeout:   c.Config.RequestComplainTimeout,
 		AutoRemoveTimeout: c.Config.RequestAutoRemoveTimeout,

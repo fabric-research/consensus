@@ -6,7 +6,7 @@
 package bft
 
 import (
-	"errors"
+	"context"
 	"sync"
 	"sync/atomic"
 
@@ -44,11 +44,9 @@ type Batcher interface {
 //
 //go:generate mockery -dir . -name RequestPool -case underscore -output ./mocks/
 type RequestPool interface {
-	Prune(predicate func([]byte) error)
 	Submit(request []byte) error
-	Size() int
-	NextRequests(maxCount int, maxSizeBytes uint64, check bool) (batch [][]byte, full bool)
-	RemoveRequest(request types.RequestInfo) error
+	NextRequests(ctx context.Context) [][]byte
+	RemoveRequests(request ...types.RequestInfo) error
 	StopTimers()
 	RestartTimers()
 	Close()
@@ -465,15 +463,11 @@ func (c *Controller) ViewChanged(newViewNumber uint64, newProposalSequence uint6
 }
 
 func (c *Controller) getNextBatch() [][]byte {
-	var validRequests [][]byte
-	for len(validRequests) == 0 { // no valid requests in this batch
-		requests := c.Batcher.NextBatch()
-		if c.stopped() || c.Batcher.Closed() {
-			return nil
-		}
-		validRequests = append(validRequests, requests...)
+	requests := c.Batcher.NextBatch()
+	if c.stopped() || c.Batcher.Closed() {
+		return nil
 	}
-	return validRequests
+	return requests
 }
 
 func (c *Controller) propose() {
@@ -588,16 +582,6 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 	if syncResponse.Reconfig.InReplicatedDecisions {
 		c.close()
 		c.ViewChanger.close()
-	}
-
-	if len(syncResponse.RequestDel) != 0 {
-		c.RequestPool.Prune(func(bytes []byte) error {
-			return errors.New("need all delete")
-		})
-
-		for i := range syncResponse.RequestDel {
-			_ = c.RequestPool.RemoveRequest(syncResponse.RequestDel[i])
-		}
 	}
 
 	decision := syncResponse.Latest
@@ -738,10 +722,8 @@ func (c *Controller) MaybePruneRevokedRequests() {
 	c.verificationSequence = newVerSqn
 
 	c.Logger.Infof("Verification sequence changed: %d --> %d", oldVerSqn, newVerSqn)
-	c.RequestPool.Prune(func(req []byte) error {
-		_, err := c.Verifier.VerifyRequest(req)
-		return err
-	})
+
+	// TODO: prune revoked requests
 }
 
 func (c *Controller) acquireLeaderToken() {
@@ -892,10 +874,8 @@ func (c *Controller) Decide(proposal types.Proposal, signatures []types.Signatur
 }
 
 func (c *Controller) removeDeliveredFromPool(d decision) {
-	for _, reqInfo := range d.requests {
-		if err := c.RequestPool.RemoveRequest(reqInfo); err != nil {
-			c.Logger.Debugf("Request %s wasn't found in the pool : %s", reqInfo, err)
-		}
+	if err := c.RequestPool.RemoveRequests(d.requests...); err != nil {
+		c.Logger.Panicf("Failed removing requests from pool: %v", err)
 	}
 }
 
