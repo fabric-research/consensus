@@ -8,7 +8,6 @@ package request
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -100,5 +99,4 @@ func TestPending(t *testing.T) {
 	}
 
 	assert.Equal(t, uint32(workerNum*workPerWorker), atomic.LoadUint32(&submittedCount))
-	fmt.Println(len(ps.buckets))
 }
