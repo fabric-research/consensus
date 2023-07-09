@@ -43,8 +43,8 @@ type RequestInspector interface {
 }
 
 // Pool implements requests pool, maintains pool of given size provided during
-// construction. In case there are more incoming request than given size it will
-// block during submit until there will be place to submit new ones.
+// construction. In case there are more incoming request than the given size it will
+// block during submit until there will be space to submit new ones.
 type Pool struct {
 	lock            sync.Mutex
 	timestamp       uint64
@@ -76,7 +76,7 @@ type PoolOptions struct {
 	SecondStrikeThreshold time.Duration
 }
 
-// NewPool constructs new requests pool
+// NewPool constructs a new requests pool
 func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool {
 	if options.SubmitTimeout == 0 {
 		options.SubmitTimeout = defaultRequestTimeout
@@ -204,7 +204,6 @@ func (rp *Pool) Submit(request []byte) error {
 
 // NextRequests returns the next requests to be batched.
 // It returns at most maxCount requests, and at most maxSizeBytes, in a newly allocated slice.
-// Return variable full indicates that the batch cannot be increased further by calling again with the same arguments.
 func (rp *Pool) NextRequests(ctx context.Context) [][]byte {
 	requests := rp.batchStore.Fetch(ctx)
 
@@ -235,7 +234,7 @@ func (rp *Pool) Close() {
 }
 
 // StopTimers stops all the timeout timers attached to the pending requests, and marks the pool as "stopped".
-// This which prevents submission of new requests, and renewal of timeouts by timer go-routines that where running
+// This prevents submission of new requests, and renewal of timeouts by timer go-routines that where running
 // at the time of the call to StopTimers().
 func (rp *Pool) StopTimers() {
 	atomic.StoreUint32(&rp.stopped, 1)

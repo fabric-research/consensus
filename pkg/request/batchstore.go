@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type BatchStore struct {
@@ -84,15 +83,6 @@ func NewBatchStore(maxCapacity int, batchMaxSize int, onDelete func(string)) *Ba
 		maxCapacity:  maxCapacity,
 	}
 	bs.signal = sync.Cond{L: &bs.lock}
-
-	go func() {
-		for {
-			time.Sleep(time.Second * 5)
-			bs.lock.RLock()
-			fmt.Println(len(bs.readyBatches), "ready batches and", atomic.LoadUint32(&bs.currentBatch.size), "requests in current batch")
-			bs.lock.RUnlock()
-		}
-	}()
 
 	return bs
 }

@@ -214,7 +214,7 @@ func (ps *PendingStore) removeRequest(reqID string, now time.Time) {
 
 	// However, if we were too late to store, then either an insert takes place
 	// concurrently, or happened in the past.
-	// We need to wait for the insert to complete before we continue to deletion,
+	// We need to wait for the insert to complete before we continue the deletion,
 	// otherwise we will have a zombie request that will never be deleted.
 
 	for insertPending {
