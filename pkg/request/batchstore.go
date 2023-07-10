@@ -28,14 +28,14 @@ type batch struct {
 	lock     sync.RWMutex
 	size     uint32
 	enqueued bool
-	m        sync.Map
+	m        map[any]any
 }
 
 func (b *batch) Load(key any) (value any, ok bool) {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
-
-	return b.m.Load(key)
+	val, exist := b.m[key]
+	return val, exist
 }
 
 func (b *batch) isEnqueued() bool {
@@ -51,21 +51,26 @@ func (b *batch) markEnqueued() {
 }
 
 func (b *batch) Store(key, value any) {
-	b.lock.RLock()
-	defer b.lock.RUnlock()
-
-	b.m.Store(key, value)
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	b.m[key] = value
 }
 
 func (b *batch) Range(f func(key, value any) bool) {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
-
-	b.m.Range(f)
+	for k, v := range b.m {
+		ok := f(k, v)
+		if !ok {
+			return
+		}
+	}
 }
 
 func (b *batch) Delete(key any) {
-	b.m.Delete(key)
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	delete(b.m, key)
 }
 
 func NewBatchStore(maxCapacity int, batchMaxSize int, onDelete func(string)) *BatchStore {
@@ -77,7 +82,7 @@ func NewBatchStore(maxCapacity int, batchMaxSize int, onDelete func(string)) *Ba
 	}
 
 	bs := &BatchStore{
-		currentBatch: &batch{},
+		currentBatch: &batch{m: make(map[any]any, batchMaxSize*2)},
 		onDelete:     onDelete,
 		batchMaxSize: uint32(batchMaxSize),
 		maxCapacity:  maxCapacity,
@@ -132,7 +137,7 @@ func (bs *BatchStore) Insert(key string, value interface{}) bool {
 		currBatch.markEnqueued()
 		bs.readyBatches = append(bs.readyBatches, currBatch)
 		// Create an empty batch to be used
-		bs.currentBatch = &batch{}
+		bs.currentBatch = &batch{m: make(map[any]any, bs.batchMaxSize*2)}
 		// If we have a waiting fetch, notify it
 		bs.signal.Signal()
 		bs.lock.Unlock()
