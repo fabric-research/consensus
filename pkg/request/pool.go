@@ -54,7 +54,6 @@ type Pool struct {
 	inspector       RequestInspector
 	options         PoolOptions
 	batchStore      *BatchStore
-	cancel          context.CancelFunc
 	semaphore       *semaphore.Weighted
 	closed          uint32
 	stopped         uint32
