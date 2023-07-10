@@ -8,11 +8,12 @@ package request
 import (
 	"context"
 	"fmt"
-	"github.com/pkg/errors"
-	"golang.org/x/sync/semaphore"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pkg/errors"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -126,7 +127,6 @@ func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool 
 }
 
 func (rp *Pool) SetBatching(enabled bool) {
-	rp.batchStore.SetBatching(enabled)
 	if enabled {
 		atomic.StoreUint32(&rp.batchingEnabled, 1)
 	} else {

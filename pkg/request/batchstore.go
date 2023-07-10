@@ -13,15 +13,14 @@ import (
 )
 
 type BatchStore struct {
-	batchingEnabled uint32
-	currentBatch    *batch
-	readyBatches    []*batch
-	onDelete        func(key string)
-	batchMaxSize    uint32
-	maxCapacity     int
-	keys2Batches    sync.Map
-	lock            sync.RWMutex
-	signal          sync.Cond
+	currentBatch *batch
+	readyBatches []*batch
+	onDelete     func(key string)
+	batchMaxSize uint32
+	maxCapacity  int
+	keys2Batches sync.Map
+	lock         sync.RWMutex
+	signal       sync.Cond
 }
 
 type batch struct {
@@ -159,14 +158,6 @@ func (bs *BatchStore) ForEach(f func(k, v interface{})) {
 		f(k, v)
 		return true
 	})
-}
-
-func (bs *BatchStore) SetBatching(enabled bool) {
-	if enabled {
-		atomic.StoreUint32(&bs.batchingEnabled, 1)
-	} else {
-		atomic.StoreUint32(&bs.batchingEnabled, 0)
-	}
 }
 
 func (bs *BatchStore) Remove(key string) {

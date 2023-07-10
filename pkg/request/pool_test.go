@@ -10,13 +10,14 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type reqInspector struct {

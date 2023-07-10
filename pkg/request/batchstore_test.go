@@ -7,10 +7,11 @@ package request
 
 import (
 	"encoding/binary"
-	"github.com/stretchr/testify/assert"
 	"runtime"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBatch(t *testing.T) {
