@@ -43,7 +43,7 @@ type RequestInspector interface {
 }
 
 // Pool implements requests pool, maintains pool of given size provided during
-// construction. In case there are more incoming request than given size it will
+// construction. In case there are more incoming request than the given size it will
 // block during submit until there will be place to submit new ones.
 type Pool struct {
 	lock            sync.Mutex
