@@ -37,6 +37,7 @@ type PendingStore struct {
 	processed             sync.Map
 	currentBucket         atomic.Value
 	buckets               []*bucket
+	stopped               uint32
 }
 
 func (ps *PendingStore) Init() {
@@ -47,6 +48,10 @@ func (ps *PendingStore) Init() {
 
 func (ps *PendingStore) Restart() {
 	go ps.changeEpochs()
+}
+
+func (ps *PendingStore) Stop() {
+	atomic.StoreUint32(&ps.stopped, 1)
 }
 
 func (ps *PendingStore) changeEpochs() {
@@ -63,16 +68,21 @@ func (ps *PendingStore) changeEpochs() {
 
 		ps.rotateBuckets(now)
 		ps.garbageCollectEmptyBuckets()
+		if now.Sub(lastProcessedGC) > ps.ReqIDGCInterval {
+			lastProcessedGC = now
+			ps.garbageCollectProcessed(now)
+		}
+
+		if atomic.LoadUint32(&ps.stopped) == 1 {
+			continue
+		}
+
 		ps.checkFirstStrike(now)
 		if ps.checkSecondStrike(now) {
 			ps.SecondStrikeCallback()
 			break
 		}
 
-		if now.Sub(lastProcessedGC) > ps.ReqIDGCInterval {
-			lastProcessedGC = now
-			ps.garbageCollectProcessed(now)
-		}
 	}
 }
 

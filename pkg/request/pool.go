@@ -232,21 +232,16 @@ func (rp *Pool) Close() {
 	rp.Clear()
 }
 
-// StopTimers stops all the timeout timers attached to the pending requests, and marks the pool as "stopped".
-// This prevents submission of new requests, and renewal of timeouts by timer go-routines that where running
-// at the time of the call to StopTimers().
-func (rp *Pool) StopTimers() {
+// Halt stops the callbacks of the first and second strikes.
+func (rp *Pool) Halt() {
 	atomic.StoreUint32(&rp.stopped, 1)
-
-	rp.logger.Debugf("Stopped all timers")
+	rp.pending.Stop()
 }
 
-// RestartTimers restarts all the timeout timers attached to the pending requests, as RequestForwardTimeout, and re-allows
-// submission of new requests.
-func (rp *Pool) RestartTimers() {
-	rp.lock.Lock()
-	defer rp.lock.Unlock()
+// Restart restarts the pool.
+// When batching is set to true the pool is expected to respond to NextRequests.
+func (rp *Pool) Restart(batching bool) {
+	if batching {
 
-	// TODO
-	rp.logger.Debugf("Restarted all timers")
+	}
 }
