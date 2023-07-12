@@ -54,7 +54,7 @@ func TestRequestPool(t *testing.T) {
 		},
 	})
 
-	primaryPool.SetBatching(true)
+	primaryPool.setBatching(true)
 
 	var submittedCount uint32
 	var committedReqCount int

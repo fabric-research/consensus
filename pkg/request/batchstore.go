@@ -7,7 +7,6 @@ package request
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -17,7 +16,6 @@ type BatchStore struct {
 	readyBatches []*batch
 	onDelete     func(key string)
 	batchMaxSize uint32
-	maxCapacity  int
 	keys2Batches sync.Map
 	lock         sync.RWMutex
 	signal       sync.Cond
@@ -72,19 +70,11 @@ func (b *batch) Delete(key any) {
 	delete(b.m, key)
 }
 
-func NewBatchStore(maxCapacity int, batchMaxSize int, onDelete func(string)) *BatchStore {
-	// Ensure the max capacity divides by the batchMaxSize of each batch
-	maxCapacity = maxCapacity - (maxCapacity % batchMaxSize)
-
-	if maxCapacity/batchMaxSize == 0 {
-		panic(fmt.Sprintf("Max capacity (%d) cannot be lower than batch max size (%d)", maxCapacity, batchMaxSize))
-	}
-
+func NewBatchStore(batchMaxSize int, onDelete func(string)) *BatchStore {
 	bs := &BatchStore{
 		currentBatch: &batch{m: make(map[any]any, batchMaxSize*2)},
 		onDelete:     onDelete,
 		batchMaxSize: uint32(batchMaxSize),
-		maxCapacity:  maxCapacity,
 	}
 	bs.signal = sync.Cond{L: &bs.lock}
 

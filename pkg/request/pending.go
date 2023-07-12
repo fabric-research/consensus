@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 type Semaphore interface {
@@ -38,6 +40,7 @@ type PendingStore struct {
 	currentBucket         atomic.Value
 	buckets               []*bucket
 	stopped               uint32
+	closed                uint32
 }
 
 func (ps *PendingStore) Init() {
@@ -46,18 +49,42 @@ func (ps *PendingStore) Init() {
 	ps.lastTick.Store(ps.StartTime)
 }
 
-func (ps *PendingStore) Restart() {
+func (ps *PendingStore) Start() {
 	go ps.changeEpochs()
+}
+
+func (ps *PendingStore) Restart() {
+	now := ps.now()
+	for _, bucket := range ps.buckets {
+		bucket.changeLastTimestamp(now)
+	}
+	atomic.StoreUint32(&ps.stopped, 0)
 }
 
 func (ps *PendingStore) Stop() {
 	atomic.StoreUint32(&ps.stopped, 1)
 }
 
+func (ps *PendingStore) isStopped() bool {
+	return atomic.LoadUint32(&ps.stopped) == 1
+}
+
+func (ps *PendingStore) Close() {
+	atomic.StoreUint32(&ps.closed, 1)
+}
+
+func (ps *PendingStore) isClosed() bool {
+	return atomic.LoadUint32(&ps.closed) == 1
+}
+
 func (ps *PendingStore) changeEpochs() {
 	lastEpochChange := ps.StartTime
 	lastProcessedGC := ps.StartTime
 	for {
+		if ps.isClosed() {
+			return
+		}
+
 		now := <-ps.Time
 		ps.lastTick.Store(now)
 		if now.Sub(lastEpochChange) <= ps.Epoch {
@@ -174,6 +201,7 @@ func (ps *PendingStore) rotateBuckets(now time.Time) {
 }
 
 func (ps *PendingStore) RemoveRequests(requestIDs ...string) {
+
 	workerNum := runtime.NumCPU()
 
 	var wg sync.WaitGroup
@@ -241,6 +269,11 @@ func (ps *PendingStore) removeRequest(reqID string, now time.Time) {
 }
 
 func (ps *PendingStore) Submit(request []byte, ctx context.Context) error {
+
+	if ps.isClosed() {
+		return errors.Errorf("pending store closed, request rejected")
+	}
+
 	if err := ps.Semaphore.Acquire(ctx, 1); err != nil {
 		return err
 	}
@@ -294,6 +327,13 @@ func (b *bucket) seal(now time.Time) *bucket {
 	b.lastTimestamp = now
 
 	return newBucket(b.reqID2Bucket, b.id+1)
+}
+
+func (b *bucket) changeLastTimestamp(t time.Time) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	b.lastTimestamp = t
 }
 
 func (b *bucket) TryInsert(reqID string, request []byte) bool {

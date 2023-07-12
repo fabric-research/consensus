@@ -78,6 +78,9 @@ type PoolOptions struct {
 
 // NewPool constructs a new requests pool
 func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool {
+
+	// TODO check pool options
+
 	if options.SubmitTimeout == 0 {
 		options.SubmitTimeout = defaultRequestTimeout
 	}
@@ -108,7 +111,7 @@ func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool 
 	}
 
 	ps.Init()
-	ps.Restart()
+	ps.Start()
 
 	rp := &Pool{
 		pending:   ps,
@@ -118,55 +121,22 @@ func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool 
 		options:   options,
 	}
 
-	rp.batchStore = NewBatchStore(options.MaxSize, options.BatchMaxSize, func(key string) {
+	rp.batchStore = NewBatchStore(options.BatchMaxSize, func(key string) {
 		rp.semaphore.Release(1)
 	})
 
 	return rp
 }
 
-func (rp *Pool) SetBatching(enabled bool) {
-	if enabled {
-		atomic.StoreUint32(&rp.batchingEnabled, 1)
-	} else {
-		atomic.StoreUint32(&rp.batchingEnabled, 0)
-	}
-}
-
-func (rp *Pool) isClosed() bool {
-	return atomic.LoadUint32(&rp.closed) == 1
-}
-
-func (rp *Pool) Clear() {
-	panic("should not have been called")
-}
-
-type pendingRequest struct {
-	request      []byte
-	ri           string
-	arriveTime   uint64
-	next         *pendingRequest
-	forwarded    bool
-	forwardTime  uint64
-	complainedAt uint64
-}
-
-func (pr *pendingRequest) reset(now uint64) {
-	atomic.StoreUint64(&pr.complainedAt, 0)
-	atomic.StoreUint64(&pr.forwardTime, now)
-	atomic.StoreUint64(&pr.arriveTime, now)
-	pr.forwarded = false
-	pr.next = nil
-}
-
 // Submit a request into the pool, returns an error when request is already in the pool
 func (rp *Pool) Submit(request []byte) error {
-	reqID := rp.inspector.RequestID(request)
-	if rp.isClosed() {
-		return errors.Errorf("pool closed, request rejected: %s", reqID)
+	if rp.isClosed() || rp.isStopped() {
+		return errors.Errorf("pool halted or closed, request rejected")
 	}
 
-	if atomic.LoadUint32(&rp.batchingEnabled) == 0 {
+	reqID := rp.inspector.RequestID(request)
+
+	if !rp.isBatchingEnabled() {
 		ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
 		defer cancel()
 
@@ -202,8 +172,13 @@ func (rp *Pool) Submit(request []byte) error {
 }
 
 // NextRequests returns the next requests to be batched.
-// It returns at most maxCount requests, and at most maxSizeBytes, in a newly allocated slice.
 func (rp *Pool) NextRequests(ctx context.Context) [][]byte {
+
+	if !rp.isBatchingEnabled() {
+		rp.logger.Warnf("NextRequests is called when batching is not enabled")
+		return nil
+	}
+
 	requests := rp.batchStore.Fetch(ctx)
 
 	rawRequests := make([][]byte, len(requests))
@@ -215,7 +190,7 @@ func (rp *Pool) NextRequests(ctx context.Context) [][]byte {
 }
 
 func (rp *Pool) RemoveRequests(requests ...string) error {
-	if atomic.LoadUint32(&rp.batchingEnabled) == 0 {
+	if !rp.isBatchingEnabled() {
 		rp.pending.RemoveRequests(requests...)
 		return nil
 	}
@@ -226,10 +201,14 @@ func (rp *Pool) RemoveRequests(requests ...string) error {
 	return nil
 }
 
-// Close removes all the requests, stops all the timeout timers.
+// Close closes the pool
 func (rp *Pool) Close() {
 	atomic.StoreUint32(&rp.closed, 1)
-	rp.Clear()
+	// TODO need to remove all requests?
+}
+
+func (rp *Pool) isClosed() bool {
+	return atomic.LoadUint32(&rp.closed) == 1
 }
 
 // Halt stops the callbacks of the first and second strikes.
@@ -238,10 +217,51 @@ func (rp *Pool) Halt() {
 	rp.pending.Stop()
 }
 
+func (rp *Pool) isStopped() bool {
+	return atomic.LoadUint32(&rp.stopped) == 1
+}
+
 // Restart restarts the pool.
 // When batching is set to true the pool is expected to respond to NextRequests.
 func (rp *Pool) Restart(batching bool) {
-	if batching {
 
+	defer atomic.StoreUint32(&rp.stopped, 0)
+
+	rp.Halt()
+
+	isBatching := rp.isBatchingEnabled()
+
+	rp.setBatching(batching)
+
+	if isBatching {
+		if batching {
+			// if batching was already enabled there is nothing to do
+			return
+		}
+		// TODO move all to pending store
 	}
+
+	if !isBatching {
+		if !batching {
+			// if we were already not batching just restart the pending store
+			rp.pending.Restart()
+			return
+		}
+		// TODO move all to batch store
+	}
+
+	rp.pending.Restart()
+
+}
+
+func (rp *Pool) setBatching(enabled bool) {
+	if enabled {
+		atomic.StoreUint32(&rp.batchingEnabled, 1)
+	} else {
+		atomic.StoreUint32(&rp.batchingEnabled, 0)
+	}
+}
+
+func (rp *Pool) isBatchingEnabled() bool {
+	return atomic.LoadUint32(&rp.batchingEnabled) == 1
 }

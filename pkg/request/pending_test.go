@@ -45,7 +45,7 @@ func TestPending(t *testing.T) {
 	}
 
 	ps.Init()
-	ps.Restart()
+	ps.Start()
 
 	workerNum := runtime.NumCPU()
 	workPerWorker := 100000
