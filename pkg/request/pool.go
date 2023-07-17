@@ -174,6 +174,11 @@ func (rp *Pool) Submit(request []byte) error {
 // NextRequests returns the next requests to be batched.
 func (rp *Pool) NextRequests(ctx context.Context) [][]byte {
 
+	if rp.isClosed() || rp.isStopped() {
+		rp.logger.Warnf("pool halted or closed, returning nil")
+		return nil
+	}
+
 	if !rp.isBatchingEnabled() {
 		rp.logger.Warnf("NextRequests is called when batching is not enabled")
 		return nil
@@ -229,28 +234,29 @@ func (rp *Pool) Restart(batching bool) {
 
 	rp.Halt()
 
-	isBatching := rp.isBatchingEnabled()
+	batchingWasEnabled := rp.isBatchingEnabled()
 
-	rp.setBatching(batching)
+	if batchingWasEnabled && batching {
+		// if batching was already enabled there is nothing to do
+		return
+	}
 
-	if isBatching {
-		if batching {
-			// if batching was already enabled there is nothing to do
-			return
-		}
+	if !batchingWasEnabled && !batching {
+		// if batching was not enabled anyway just restart the pending store
+		rp.pending.Restart()
+		return
+	}
+
+	rp.setBatching(batching) // change the batching
+
+	if batchingWasEnabled { // batching was enabled and now it is not
 		// TODO move all to pending store
+		return
 	}
 
-	if !isBatching {
-		if !batching {
-			// if we were already not batching just restart the pending store
-			rp.pending.Restart()
-			return
-		}
-		// TODO move all to batch store
-	}
-
-	rp.pending.Restart()
+	// batching was not enabled but now it is
+	// TODO move all to batch store
+	return
 
 }
 
