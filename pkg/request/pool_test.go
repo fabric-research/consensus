@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	bft "github.com/SmartBFT-Go/consensus/pkg/types"
+
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -24,9 +26,9 @@ import (
 type reqInspector struct {
 }
 
-func (ri *reqInspector) RequestID(req []byte) string {
+func (ri *reqInspector) RequestID(req []byte) bft.RequestInfo {
 	digest := sha256.Sum256(req)
-	return hex.EncodeToString(digest[:])
+	return bft.RequestInfo{ID: hex.EncodeToString(digest[:])}
 }
 
 func TestRequestPool(t *testing.T) {
@@ -112,7 +114,7 @@ func removeRequests(workerNum int, batch [][]byte, requestInspector *reqInspecto
 				if i%workerNum != workerID {
 					continue
 				}
-				reqInfos = append(reqInfos, requestInspector.RequestID(req))
+				reqInfos = append(reqInfos, requestInspector.RequestID(req).ID)
 			}
 
 			pool.RemoveRequests(reqInfos...)
@@ -393,7 +395,7 @@ func parseTestRequest(request []byte) (txID, data string) {
 
 type testRequestInspector struct{}
 
-func (ins *testRequestInspector) RequestID(req []byte) string {
+func (ins *testRequestInspector) RequestID(req []byte) bft.RequestInfo {
 	ID, _ := parseTestRequest(req)
-	return ID
+	return bft.RequestInfo{ID: ID}
 }
