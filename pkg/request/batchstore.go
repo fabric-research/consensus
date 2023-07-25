@@ -12,20 +12,22 @@ import (
 )
 
 type BatchStore struct {
-	currentBatch *batch
-	readyBatches []*batch
-	onDelete     func(key string)
-	batchMaxSize uint32
-	keys2Batches sync.Map
-	lock         sync.RWMutex
-	signal       sync.Cond
+	currentBatch      *batch
+	readyBatches      []*batch
+	onDelete          func(key string)
+	batchMaxSize      uint32
+	batchMaxSizeBytes uint64
+	keys2Batches      sync.Map
+	lock              sync.RWMutex
+	signal            sync.Cond
 }
 
 type batch struct {
-	lock     sync.RWMutex
-	size     uint32
-	enqueued bool
-	m        map[any]any
+	lock      sync.RWMutex
+	size      uint32
+	sizeBytes uint64
+	enqueued  bool
+	m         map[any]any
 }
 
 func (b *batch) Load(key any) (value any, ok bool) {
@@ -70,11 +72,12 @@ func (b *batch) Delete(key any) {
 	delete(b.m, key)
 }
 
-func NewBatchStore(batchMaxSize int, onDelete func(string)) *BatchStore {
+func NewBatchStore(batchMaxSize int, batchMaxSizeBytes uint64, onDelete func(string)) *BatchStore {
 	bs := &BatchStore{
-		currentBatch: &batch{m: make(map[any]any, batchMaxSize*2)},
-		onDelete:     onDelete,
-		batchMaxSize: uint32(batchMaxSize),
+		currentBatch:      &batch{m: make(map[any]any, batchMaxSize*2)},
+		onDelete:          onDelete,
+		batchMaxSize:      uint32(batchMaxSize),
+		batchMaxSizeBytes: batchMaxSizeBytes,
 	}
 	bs.signal = sync.Cond{L: &bs.lock}
 
@@ -92,15 +95,16 @@ func (bs *BatchStore) Lookup(key string) (interface{}, bool) {
 	return batch.Load(key)
 }
 
-func (bs *BatchStore) Insert(key string, value interface{}) bool {
+func (bs *BatchStore) Insert(key string, value interface{}, size uint64) bool {
 	for {
 		// Try to add to the current batch. It doesn't matter if we don't end up using it,
 		// we only care about if it's higher than the limit or not.
 		bs.lock.RLock()
 		full := atomic.AddUint32(&bs.currentBatch.size, 1) > bs.batchMaxSize
+		fullBytes := atomic.AddUint64(&bs.currentBatch.sizeBytes, size) > bs.batchMaxSizeBytes
 		currBatch := bs.currentBatch
 
-		if !full {
+		if !full && !fullBytes {
 			_, exists := bs.keys2Batches.LoadOrStore(key, currBatch)
 			if exists {
 				bs.lock.RUnlock()
@@ -182,7 +186,7 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 		}
 	}()
 
-	for {
+	for { // TODO why is there a for loop here?
 		if len(bs.readyBatches) > 0 {
 			return bs.dequeueBatch()
 		}
@@ -204,7 +208,7 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 		}
 		// Mark the current batch as empty, since we are returning its content
 		// to the caller.
-		bs.currentBatch = &batch{}
+		bs.currentBatch = &batch{m: make(map[any]any, bs.batchMaxSize*2)}
 		return bs.prepareBatch(returnedBatch)
 	}
 }

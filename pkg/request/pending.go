@@ -41,6 +41,7 @@ type PendingStore struct {
 	buckets               []*bucket
 	stopped               uint32
 	closed                uint32
+	bucketsLock           sync.RWMutex
 }
 
 func (ps *PendingStore) Init() {
@@ -54,10 +55,13 @@ func (ps *PendingStore) Start() {
 }
 
 func (ps *PendingStore) Restart() {
+	ps.Stop()
 	now := ps.now()
+	ps.bucketsLock.RLock()
 	for _, bucket := range ps.buckets {
 		bucket.changeLastTimestamp(now)
 	}
+	ps.bucketsLock.RUnlock()
 	atomic.StoreUint32(&ps.stopped, 0)
 }
 
@@ -128,6 +132,7 @@ func (ps *PendingStore) garbageCollectProcessed(now time.Time) {
 func (ps *PendingStore) garbageCollectEmptyBuckets() {
 	var newBuckets []*bucket
 
+	ps.bucketsLock.RLock()
 	for _, bucket := range ps.buckets {
 		if bucket.getSize() > 0 {
 			newBuckets = append(newBuckets, bucket)
@@ -136,11 +141,17 @@ func (ps *PendingStore) garbageCollectEmptyBuckets() {
 			ps.Logger.Debugf("Garbage collected bucket %d", bucket.id)
 		}
 	}
+	ps.bucketsLock.RUnlock()
 
+	ps.bucketsLock.Lock()
+	defer ps.bucketsLock.Unlock()
 	ps.buckets = newBuckets
 }
 
 func (ps *PendingStore) checkFirstStrike(now time.Time) {
+
+	ps.bucketsLock.RLock()
+	defer ps.bucketsLock.RUnlock()
 
 	var buckets []*bucket
 
@@ -169,6 +180,9 @@ func (ps *PendingStore) checkFirstStrike(now time.Time) {
 
 func (ps *PendingStore) checkSecondStrike(now time.Time) bool {
 
+	ps.bucketsLock.RLock()
+	defer ps.bucketsLock.RUnlock()
+
 	var secondStrike bool
 
 	for _, bucket := range ps.buckets {
@@ -196,6 +210,9 @@ func (ps *PendingStore) rotateBuckets(now time.Time) {
 	if !ps.currentBucket.CompareAndSwap(currentBucket, currentBucket.seal(now)) {
 		panic("programming error: swap should not have failed")
 	}
+
+	ps.bucketsLock.Lock()
+	defer ps.bucketsLock.Unlock()
 
 	ps.buckets = append(ps.buckets, currentBucket)
 }
@@ -300,6 +317,35 @@ func (ps *PendingStore) Submit(request []byte, ctx context.Context) error {
 
 func (ps *PendingStore) now() time.Time {
 	return ps.lastTick.Load().(time.Time)
+}
+
+// GetAllRequests returns all stored requests in the same order of their arrival, the oldest one will be the first
+// it makes sure that the PendingStore is closed
+func (ps *PendingStore) GetAllRequests(max int) [][]byte {
+
+	if !ps.isClosed() {
+		ps.Logger.Warnf("Pending store is not closed while calling GetAllRequests")
+		return nil
+	}
+
+	requests := make([][]byte, 0, max*2)
+
+	ps.bucketsLock.RLock()
+	for _, b := range ps.buckets {
+		b.requests.Range(func(_, v interface{}) bool {
+			requests = append(requests, v.([]byte))
+			return true
+		})
+	}
+	ps.bucketsLock.RUnlock()
+
+	currentBucket := ps.currentBucket.Load().(*bucket)
+	currentBucket.requests.Range(func(_, v interface{}) bool {
+		requests = append(requests, v.([]byte))
+		return true
+	})
+
+	return requests
 }
 
 type bucket struct {

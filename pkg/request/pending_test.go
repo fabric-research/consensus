@@ -100,3 +100,48 @@ func TestPending(t *testing.T) {
 
 	assert.Equal(t, uint32(workerNum*workPerWorker), atomic.LoadUint32(&submittedCount))
 }
+
+func TestGetAll(t *testing.T) {
+	sugaredLogger := createLogger(t, 0)
+	requestInspector := &reqInspector{}
+
+	start := time.Now()
+	ticker := time.NewTicker(time.Millisecond * 100)
+
+	ps := &PendingStore{
+		ReqIDLifetime:   time.Second * 10,
+		ReqIDGCInterval: time.Second,
+		Logger:          sugaredLogger,
+		SecondStrikeCallback: func() {
+
+		},
+		StartTime: start,
+		Time:      ticker.C,
+		FirstStrikeCallback: func([]byte) {
+
+		},
+		Epoch:                 time.Millisecond * 200,
+		FirstStrikeThreshold:  time.Second * 10,
+		Inspector:             requestInspector,
+		Semaphore:             semaphore.NewWeighted(10000),
+		SecondStrikeThreshold: time.Second,
+	}
+
+	ps.Init()
+	ps.Start()
+
+	count := 100
+
+	for i := 0; i < count; i++ {
+		req := make([]byte, 8)
+		binary.BigEndian.PutUint64(req, uint64(i))
+		if err := ps.Submit(req, context.Background()); err != nil {
+			panic(err)
+		}
+	}
+
+	ps.Close()
+	all := ps.GetAllRequests(count)
+	assert.Equal(t, count, len(all))
+
+}

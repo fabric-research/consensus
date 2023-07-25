@@ -17,10 +17,8 @@ import (
 )
 
 const (
-	defaultRequestTimeout             = 10 * time.Second // for unit tests only
-	defaultMaxBytes                   = 100 * 1024       // default max request size would be of size 100Kb
-	defaultDelMapSwitch               = time.Second * 20 // for cicle erase silice of delete elements
-	defaultTimestampIncrementDuration = time.Second * 1
+	defaultSubmitTimeout = 10 * time.Second // for unit tests only
+	defaultBatchTimeout  = time.Second
 )
 
 var (
@@ -69,7 +67,9 @@ type requestItem struct {
 type PoolOptions struct {
 	MaxSize               int
 	BatchMaxSize          int
+	BatchMaxSizeBytes     uint64
 	SubmitTimeout         time.Duration
+	BatchTimeout          time.Duration
 	AutoRemoveTimeout     time.Duration
 	OnFirstStrikeTimeout  func([]byte)
 	FirstStrikeThreshold  time.Duration
@@ -82,16 +82,52 @@ func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool 
 	// TODO check pool options
 
 	if options.SubmitTimeout == 0 {
-		options.SubmitTimeout = defaultRequestTimeout
+		options.SubmitTimeout = defaultSubmitTimeout
+	}
+	if options.BatchTimeout == 0 {
+		options.BatchTimeout = defaultBatchTimeout
 	}
 	if options.BatchMaxSize == 0 {
 		options.BatchMaxSize = 1000
+	}
+	if options.BatchMaxSizeBytes == 0 {
+		options.BatchMaxSizeBytes = 100000
 	}
 	if options.MaxSize == 0 {
 		options.MaxSize = 10000
 	}
 
-	ps := &PendingStore{
+	rp := &Pool{
+		logger:    log,
+		inspector: inspector,
+		semaphore: semaphore.NewWeighted(int64(options.MaxSize)),
+		options:   options,
+	}
+
+	return rp
+}
+
+func (rp *Pool) Start(batching bool) {
+
+	if batching {
+		rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
+			rp.semaphore.Release(1)
+		})
+		rp.setBatching(batching)
+		return
+	}
+
+	rp.pending = createPendingStore(rp.logger, rp.inspector, rp.options)
+	if rp.options.OnFirstStrikeTimeout != nil {
+		rp.pending.FirstStrikeCallback = rp.options.OnFirstStrikeTimeout
+	}
+
+	rp.pending.Init()
+	rp.pending.Start()
+}
+
+func createPendingStore(log Logger, inspector RequestInspector, options PoolOptions) *PendingStore {
+	return &PendingStore{
 		Inspector:             inspector,
 		ReqIDGCInterval:       options.AutoRemoveTimeout / 4,
 		ReqIDLifetime:         options.AutoRemoveTimeout,
@@ -105,27 +141,6 @@ func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool 
 		FirstStrikeCallback:   func([]byte) {},
 		SecondStrikeCallback:  func() {},
 	}
-
-	if options.OnFirstStrikeTimeout != nil {
-		ps.FirstStrikeCallback = options.OnFirstStrikeTimeout
-	}
-
-	ps.Init()
-	ps.Start()
-
-	rp := &Pool{
-		pending:   ps,
-		logger:    log,
-		inspector: inspector,
-		semaphore: semaphore.NewWeighted(int64(options.MaxSize)),
-		options:   options,
-	}
-
-	rp.batchStore = NewBatchStore(options.BatchMaxSize, func(key string) {
-		rp.semaphore.Release(1)
-	})
-
-	return rp
 }
 
 // Submit a request into the pool, returns an error when request is already in the pool
@@ -144,6 +159,10 @@ func (rp *Pool) Submit(request []byte) error {
 		return rp.pending.Submit(request, ctx)
 	}
 
+	return rp.submitToBatchStore(reqID, request)
+}
+
+func (rp *Pool) submitToBatchStore(reqID string, request []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
 	defer cancel()
 
@@ -159,7 +178,7 @@ func (rp *Pool) Submit(request []byte) error {
 		request: reqCopy,
 	}
 
-	inserted := rp.batchStore.Insert(reqID, reqItem)
+	inserted := rp.batchStore.Insert(reqID, reqItem, uint64(len(request)))
 	if !inserted {
 		rp.semaphore.Release(1)
 		rp.logger.Debugf("request %s has been already added to the pool", reqID)
@@ -172,7 +191,7 @@ func (rp *Pool) Submit(request []byte) error {
 }
 
 // NextRequests returns the next requests to be batched.
-func (rp *Pool) NextRequests(ctx context.Context) [][]byte {
+func (rp *Pool) NextRequests() [][]byte {
 
 	if rp.isClosed() || rp.isStopped() {
 		rp.logger.Warnf("pool halted or closed, returning nil")
@@ -184,6 +203,8 @@ func (rp *Pool) NextRequests(ctx context.Context) [][]byte {
 		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), rp.options.BatchTimeout)
+	defer cancel()
 	requests := rp.batchStore.Fetch(ctx)
 
 	rawRequests := make([][]byte, len(requests))
@@ -194,13 +215,13 @@ func (rp *Pool) NextRequests(ctx context.Context) [][]byte {
 	return rawRequests
 }
 
-func (rp *Pool) RemoveRequests(requests ...string) error {
+func (rp *Pool) RemoveRequests(requestsIDs ...string) error {
 	if !rp.isBatchingEnabled() {
-		rp.pending.RemoveRequests(requests...)
+		rp.pending.RemoveRequests(requestsIDs...)
 		return nil
 	}
 
-	for _, requestID := range requests {
+	for _, requestID := range requestsIDs {
 		rp.batchStore.Remove(requestID)
 	}
 	return nil
@@ -219,7 +240,9 @@ func (rp *Pool) isClosed() bool {
 // Halt stops the callbacks of the first and second strikes.
 func (rp *Pool) Halt() {
 	atomic.StoreUint32(&rp.stopped, 1)
-	rp.pending.Stop()
+	if !rp.isBatchingEnabled() {
+		rp.pending.Stop()
+	}
 }
 
 func (rp *Pool) isStopped() bool {
@@ -250,12 +273,12 @@ func (rp *Pool) Restart(batching bool) {
 	rp.setBatching(batching) // change the batching
 
 	if batchingWasEnabled { // batching was enabled and now it is not
-		// TODO move all to pending store
+		rp.moveToPendingStore()
 		return
 	}
 
 	// batching was not enabled but now it is
-	// TODO move all to batch store
+	rp.moveToBatchStore()
 	return
 
 }
@@ -270,4 +293,40 @@ func (rp *Pool) setBatching(enabled bool) {
 
 func (rp *Pool) isBatchingEnabled() bool {
 	return atomic.LoadUint32(&rp.batchingEnabled) == 1
+}
+
+func (rp *Pool) moveToPendingStore() {
+	requests := make([][]byte, rp.options.MaxSize*2)
+	rp.batchStore.ForEach(func(_, v interface{}) {
+		requests = append(requests, v.(*requestItem).request)
+	})
+	rp.pending = createPendingStore(rp.logger, rp.inspector, rp.options)
+	rp.pending.Init()
+	for _, req := range requests {
+		ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
+		if err := rp.pending.Submit(req, ctx); err != nil {
+			rp.logger.Errorf("Could not submit request into pending store; error: %s", err)
+			return
+		}
+		cancel()
+	}
+	rp.pending.Start()
+	rp.batchStore = nil
+	rp.semaphore = semaphore.NewWeighted(int64(rp.options.MaxSize))
+}
+
+func (rp *Pool) moveToBatchStore() {
+	rp.pending.Close()
+	requests := rp.pending.GetAllRequests(rp.options.MaxSize)
+	rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
+		rp.semaphore.Release(1)
+	})
+	for _, req := range requests {
+		reqID := rp.inspector.RequestID(req)
+		if err := rp.submitToBatchStore(reqID, req); err != nil {
+			rp.logger.Errorf("Could not submit request into batch store; error: %s", err)
+			return
+		}
+	}
+	rp.pending = nil
 }

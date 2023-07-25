@@ -6,7 +6,6 @@
 package request
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -16,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -37,24 +37,29 @@ func TestRequestPool(t *testing.T) {
 		FirstStrikeThreshold:  time.Second * 5,
 		SecondStrikeThreshold: time.Minute / 2,
 		BatchMaxSize:          10000,
+		BatchMaxSizeBytes:     10000 * 32,
 		MaxSize:               1000 * 100,
 		AutoRemoveTimeout:     time.Second * 10,
 		SubmitTimeout:         time.Second * 10,
+		BatchTimeout:          time.Second,
 	})
 
 	secondaryPool := NewPool(sugaredLogger, requestInspector, PoolOptions{
 		FirstStrikeThreshold:  time.Second * 5,
 		SecondStrikeThreshold: time.Minute / 2,
 		BatchMaxSize:          10000,
+		BatchMaxSizeBytes:     10000 * 32,
 		MaxSize:               1000 * 100,
 		AutoRemoveTimeout:     time.Second * 10,
 		SubmitTimeout:         time.Second * 10,
+		BatchTimeout:          time.Second,
 		OnFirstStrikeTimeout: func(_ []byte) {
 			panic("timed out on request")
 		},
 	})
 
-	primaryPool.setBatching(true)
+	primaryPool.Start(true)
+	secondaryPool.Start(false)
 
 	var submittedCount uint32
 	var committedReqCount int
@@ -83,9 +88,7 @@ func TestRequestPool(t *testing.T) {
 	}
 
 	for committedReqCount < workerPerWorker*workerNum {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		batch := primaryPool.NextRequests(ctx)
-		cancel()
+		batch := primaryPool.NextRequests()
 		committedReqCount += len(batch)
 
 		workerNum := runtime.NumCPU()
@@ -126,4 +129,190 @@ func createLogger(t *testing.T, i int) *zap.SugaredLogger {
 	logger = logger.With(zap.String("t", t.Name())).With(zap.Int64("id", int64(i)))
 	sugaredLogger := logger.Sugar()
 	return sugaredLogger
+}
+
+func TestRestartPool(t *testing.T) {
+	sugaredLogger := createLogger(t, 0)
+
+	requestInspector := &reqInspector{}
+
+	pool := NewPool(sugaredLogger, requestInspector, PoolOptions{
+		FirstStrikeThreshold:  time.Second * 5,
+		SecondStrikeThreshold: time.Minute / 2,
+		BatchMaxSize:          10,
+		BatchMaxSizeBytes:     10 * 32,
+		MaxSize:               1000,
+		AutoRemoveTimeout:     time.Second * 10,
+		SubmitTimeout:         time.Second * 10,
+	})
+
+	pool.Start(true)
+
+	count := 100
+
+	for i := 0; i < count; i++ {
+		req := make([]byte, 8)
+		binary.BigEndian.PutUint64(req, uint64(i))
+		if err := pool.Submit(req); err != nil {
+			panic(err)
+		}
+	}
+
+	batch1 := pool.NextRequests()
+
+	assert.Equal(t, 10, len(batch1))
+
+	batch2 := pool.NextRequests()
+
+	assert.Equal(t, 10, len(batch2))
+
+	pool.Restart(true)
+
+	batch3 := pool.NextRequests()
+
+	assert.Equal(t, 10, len(batch3))
+
+	pool.Restart(false)
+
+	assert.Nil(t, pool.NextRequests())
+
+	pool.Restart(false)
+
+	assert.Nil(t, pool.NextRequests())
+
+	pool.Restart(true)
+
+	batch4 := pool.NextRequests()
+
+	assert.Equal(t, 10, len(batch4))
+
+	batch5 := pool.NextRequests()
+
+	assert.Equal(t, 10, len(batch5))
+}
+
+func TestBasicBatching(t *testing.T) {
+
+	sugaredLogger := createLogger(t, 0)
+
+	byteReq1 := makeTestRequest("1", "foo")
+	byteReq2 := makeTestRequest("2", "foo-bar")
+	byteReq3 := makeTestRequest("3", "foo-bar-foo")
+	byteReq4 := makeTestRequest("4", "foo-bar-foo-bar")
+	byteReq5 := makeTestRequest("5", "foo-bar-foo-bar-foo")
+
+	pool := NewPool(sugaredLogger, &testRequestInspector{}, PoolOptions{
+		FirstStrikeThreshold:  time.Second * 5,
+		SecondStrikeThreshold: time.Minute / 2,
+		BatchMaxSize:          1,
+		BatchMaxSizeBytes:     2048,
+		MaxSize:               3,
+		AutoRemoveTimeout:     time.Second * 10,
+		SubmitTimeout:         time.Second * 10,
+		BatchTimeout:          time.Second,
+	})
+
+	pool.Start(true)
+	assert.NoError(t, pool.Submit(byteReq1))
+	assert.Len(t, pool.NextRequests(), 1)
+
+	assert.NoError(t, pool.RemoveRequests("1"))
+	assert.Len(t, pool.NextRequests(), 0) // after timeout
+
+	assert.NoError(t, pool.Submit(byteReq2))
+	assert.NoError(t, pool.Submit(byteReq3))
+
+	res := pool.NextRequests()
+	assert.Len(t, res, 1)
+	assert.Equal(t, byteReq2, res[0])
+
+	res = pool.NextRequests()
+	assert.Len(t, res, 1)
+	assert.Equal(t, byteReq3, res[0]) // TODO notice that it returns the next request although it is not deleted (unlike the original batcher)
+
+	pool.Close()
+
+	// change count limit
+
+	pool = NewPool(sugaredLogger, &testRequestInspector{}, PoolOptions{
+		FirstStrikeThreshold:  time.Second * 5,
+		SecondStrikeThreshold: time.Minute / 2,
+		BatchMaxSize:          2,
+		BatchMaxSizeBytes:     2048,
+		MaxSize:               3,
+		AutoRemoveTimeout:     time.Second * 10,
+		SubmitTimeout:         time.Second * 10,
+		BatchTimeout:          time.Second,
+	})
+
+	pool.Start(true)
+
+	assert.NoError(t, pool.Submit(byteReq4))
+	assert.NoError(t, pool.Submit(byteReq5))
+
+	res = pool.NextRequests()
+	assert.Len(t, res, 2) // TODO notice that the batch is not ordered by requests arrival (unlike in the original batcher)
+
+	pool.Close()
+
+	// change size limit
+
+	pool = NewPool(sugaredLogger, &testRequestInspector{}, PoolOptions{
+		FirstStrikeThreshold:  time.Second * 5,
+		SecondStrikeThreshold: time.Minute / 2,
+		BatchMaxSize:          3,
+		BatchMaxSizeBytes:     uint64(len(byteReq3) + len(byteReq4)),
+		MaxSize:               3,
+		AutoRemoveTimeout:     time.Second * 10,
+		SubmitTimeout:         time.Second * 10,
+		BatchTimeout:          time.Second,
+	})
+
+	pool.Start(true)
+
+	assert.NoError(t, pool.Submit(byteReq3))
+	assert.NoError(t, pool.Submit(byteReq4))
+	assert.NoError(t, pool.Submit(byteReq5))
+
+	res = pool.NextRequests()
+	assert.Len(t, res, 2)
+
+	pool.Close()
+}
+
+func makeTestRequest(txID, data string) []byte {
+	buffLen := make([]byte, 4)
+	buff := make([]byte, 12)
+
+	binary.LittleEndian.PutUint32(buffLen, uint32(len(txID)))
+	buff = append(buff[0:0], buffLen...)
+	buff = append(buff, []byte(txID)...)
+
+	binary.LittleEndian.PutUint32(buffLen, uint32(len(data)))
+	buff = append(buff, buffLen...)
+	buff = append(buff, []byte(data)...)
+
+	return buff
+}
+
+func parseTestRequest(request []byte) (txID, data string) {
+	l := binary.LittleEndian.Uint32(request)
+	buff := request[4:]
+
+	txID = string(buff[:l])
+	buff = buff[l:]
+
+	l = binary.LittleEndian.Uint32(buff)
+	buff = buff[4:]
+
+	data = string(buff[:l])
+
+	return
+}
+
+type testRequestInspector struct{}
+
+func (ins *testRequestInspector) RequestID(req []byte) string {
+	ID, _ := parseTestRequest(req)
+	return ID
 }
