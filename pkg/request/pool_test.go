@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -278,6 +279,86 @@ func TestBasicBatching(t *testing.T) {
 	assert.Len(t, res, 2)
 
 	pool.Close()
+}
+
+func TestBasicBatchingWhileSubmitting(t *testing.T) {
+	sugaredLogger := createLogger(t, 0)
+
+	pool := NewPool(sugaredLogger, &testRequestInspector{}, PoolOptions{
+		FirstStrikeThreshold:  time.Second * 5,
+		SecondStrikeThreshold: time.Minute / 2,
+		BatchMaxSize:          100,
+		BatchMaxSizeBytes:     5000,
+		MaxSize:               200,
+		AutoRemoveTimeout:     time.Second * 10,
+		SubmitTimeout:         time.Second * 10,
+		BatchTimeout:          time.Second,
+	})
+
+	pool.Start(true)
+
+	go func() {
+		for i := 0; i < 300; i++ {
+			iStr := fmt.Sprintf("%d", i)
+			byteReq := makeTestRequest(iStr, "foo")
+			err := pool.Submit(byteReq)
+			assert.NoError(t, err)
+		}
+	}()
+
+	res := pool.NextRequests()
+	assert.Len(t, res, 100)
+	for i := 0; i < 100; i++ {
+		iStr := fmt.Sprintf("%d", i)
+		err := pool.RemoveRequests(iStr)
+		assert.NoError(t, err)
+	}
+
+	res = pool.NextRequests()
+	assert.Len(t, res, 100)
+	for i := 0; i < 100; i++ {
+		iStr := fmt.Sprintf("%d", i)
+		err := pool.RemoveRequests(iStr)
+		assert.NoError(t, err)
+	}
+
+	res = pool.NextRequests()
+	assert.Len(t, res, 100)
+	for i := 0; i < 100; i++ {
+		iStr := fmt.Sprintf("%d", i)
+		err := pool.RemoveRequests(iStr)
+		assert.NoError(t, err)
+	}
+
+	pool.Close()
+}
+
+func TestBasicBatchingTimeout(t *testing.T) {
+	sugaredLogger := createLogger(t, 0)
+
+	pool := NewPool(sugaredLogger, &testRequestInspector{}, PoolOptions{
+		FirstStrikeThreshold:  time.Second * 5,
+		SecondStrikeThreshold: time.Minute / 2,
+		BatchMaxSize:          100,
+		BatchMaxSizeBytes:     5000,
+		MaxSize:               200,
+		AutoRemoveTimeout:     time.Second * 10,
+		SubmitTimeout:         time.Second * 10,
+		BatchTimeout:          time.Second,
+	})
+
+	pool.Start(true)
+
+	byteReq := makeTestRequest("1", "foo")
+	assert.NoError(t, pool.Submit(byteReq))
+
+	go func() {
+		pool.Close()
+	}()
+
+	t1 := time.Now()
+	pool.NextRequests()
+	assert.True(t, time.Since(t1) < 5*time.Second)
 }
 
 func makeTestRequest(txID, data string) []byte {
