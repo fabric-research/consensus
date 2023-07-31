@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
@@ -361,6 +362,64 @@ func TestBasicBatchingTimeout(t *testing.T) {
 	t1 := time.Now()
 	pool.NextRequests()
 	assert.True(t, time.Since(t1) < 5*time.Second)
+}
+
+func TestBasicPrune(t *testing.T) {
+	sugaredLogger := createLogger(t, 0)
+	insp := &testRequestInspector{}
+	pool := NewPool(sugaredLogger, insp, PoolOptions{
+		FirstStrikeThreshold:  time.Second * 5,
+		SecondStrikeThreshold: time.Minute / 2,
+		BatchMaxSize:          10,
+		BatchMaxSizeBytes:     1000,
+		MaxSize:               10,
+		AutoRemoveTimeout:     time.Second * 10,
+		SubmitTimeout:         time.Second * 10,
+		BatchTimeout:          time.Second,
+	})
+
+	pool.Start(true)
+
+	for i := 0; i < 10; i++ {
+		iStr := fmt.Sprintf("%d", i)
+		byteReq := makeTestRequest(iStr, "foo")
+		err := pool.Submit(byteReq)
+		assert.NoError(t, err)
+	}
+
+	pool.Prune(func(req []byte) error {
+		ID := insp.RequestID(req).ID
+		if ID == "5" {
+			return errors.New("remove")
+		}
+		return nil
+	})
+
+	res := pool.NextRequests()
+	assert.Len(t, res, 9)
+
+	pool.Restart(false)
+
+	for i := 0; i < 10; i++ {
+		iStr := fmt.Sprintf("%d", i)
+		byteReq := makeTestRequest(iStr, "foo")
+		err := pool.Submit(byteReq)
+		assert.NoError(t, err)
+	}
+
+	pool.Prune(func(req []byte) error {
+		ID := insp.RequestID(req).ID
+		if ID == "3" || ID == "4" {
+			return errors.New("remove")
+		}
+		return nil
+	})
+
+	pool.Restart(true)
+
+	res = pool.NextRequests()
+	assert.Len(t, res, 8)
+
 }
 
 func makeTestRequest(txID, data string) []byte {

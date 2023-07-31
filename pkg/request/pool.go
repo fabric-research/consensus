@@ -224,6 +224,29 @@ func (rp *Pool) RemoveRequests(requestsIDs ...string) error {
 	return nil
 }
 
+func (rp *Pool) Prune(predicate func([]byte) error) { // TODO pruning after they are batched already might be an issue
+	requestsToRemove := make([]string, 0, rp.options.MaxSize)
+	if rp.isBatchingEnabled() {
+		rp.batchStore.ForEach(func(_, v interface{}) {
+			req := v.(*requestItem).request
+			if predicate(req) != nil {
+				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req).ID)
+			}
+		})
+	} else {
+		requests := rp.pending.GetAllRequests(rp.options.MaxSize)
+		for _, req := range requests {
+			if predicate(req) != nil {
+				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req).ID)
+			}
+		}
+	}
+	err := rp.RemoveRequests(requestsToRemove...)
+	if err != nil {
+		rp.logger.Errorf("Couldn't remove pruned requests; error: %s", err)
+	}
+}
+
 // Close closes the pool
 func (rp *Pool) Close() {
 	atomic.StoreUint32(&rp.closed, 1)
@@ -293,7 +316,7 @@ func (rp *Pool) isBatchingEnabled() bool {
 }
 
 func (rp *Pool) moveToPendingStore() {
-	requests := make([][]byte, rp.options.MaxSize*2)
+	requests := make([][]byte, 0, rp.options.MaxSize)
 	rp.batchStore.ForEach(func(_, v interface{}) {
 		requests = append(requests, v.(*requestItem).request)
 	})

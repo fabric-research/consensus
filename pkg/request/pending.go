@@ -322,13 +322,7 @@ func (ps *PendingStore) now() time.Time {
 }
 
 // GetAllRequests returns all stored requests in the same order of their arrival, the oldest one will be the first
-// it makes sure that the PendingStore is closed
 func (ps *PendingStore) GetAllRequests(max int) [][]byte {
-
-	if !ps.isClosed() {
-		ps.Logger.Warnf("Pending store is not closed while calling GetAllRequests")
-		return nil
-	}
 
 	requests := make([][]byte, 0, max*2)
 
