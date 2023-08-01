@@ -21,6 +21,7 @@ import (
 const (
 	defaultSubmitTimeout = 10 * time.Second // for unit tests only
 	defaultBatchTimeout  = time.Second
+	defaultMaxBytes      = 100 * 1024 // default max request size would be of size 100Kb
 )
 
 var (
@@ -65,12 +66,13 @@ type PoolOptions struct {
 	MaxSize               int
 	BatchMaxSize          int
 	BatchMaxSizeBytes     uint64
+	RequestMaxBytes       uint64
 	SubmitTimeout         time.Duration
 	BatchTimeout          time.Duration
-	AutoRemoveTimeout     time.Duration
 	OnFirstStrikeTimeout  func([]byte)
 	FirstStrikeThreshold  time.Duration
 	SecondStrikeThreshold time.Duration
+	AutoRemoveTimeout     time.Duration
 }
 
 // NewPool constructs a new requests pool
@@ -92,6 +94,9 @@ func NewPool(log Logger, inspector api.RequestInspector, options PoolOptions) *P
 	}
 	if options.MaxSize == 0 {
 		options.MaxSize = 10000
+	}
+	if options.RequestMaxBytes == 0 {
+		options.RequestMaxBytes = defaultMaxBytes
 	}
 
 	rp := &Pool{
@@ -144,6 +149,14 @@ func createPendingStore(log Logger, inspector api.RequestInspector, options Pool
 func (rp *Pool) Submit(request []byte) error {
 	if rp.isClosed() || rp.isStopped() {
 		return errors.Errorf("pool halted or closed, request rejected")
+	}
+
+	if uint64(len(request)) > rp.options.RequestMaxBytes {
+		return fmt.Errorf(
+			"submitted request (%d) is bigger than request max bytes (%d)",
+			len(request),
+			rp.options.RequestMaxBytes,
+		)
 	}
 
 	reqInfo := rp.inspector.RequestID(request)
