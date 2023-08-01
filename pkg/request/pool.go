@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/SmartBFT-Go/consensus/pkg/api"
-
+	"github.com/SmartBFT-Go/consensus/pkg/types"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/semaphore"
 )
@@ -69,8 +69,9 @@ type PoolOptions struct {
 	RequestMaxBytes       uint64
 	SubmitTimeout         time.Duration
 	BatchTimeout          time.Duration
-	OnFirstStrikeTimeout  func([]byte)
+	OnFirstStrikeTimeout  func([]byte, types.RequestInfo)
 	FirstStrikeThreshold  time.Duration
+	OnSecondStrikeTimeout func()
 	SecondStrikeThreshold time.Duration
 	AutoRemoveTimeout     time.Duration
 }
@@ -140,8 +141,8 @@ func createPendingStore(log Logger, inspector api.RequestInspector, options Pool
 		FirstStrikeThreshold:  options.FirstStrikeThreshold,
 		Semaphore:             semaphore.NewWeighted(int64(options.MaxSize)),
 		Epoch:                 time.Second,
-		FirstStrikeCallback:   func([]byte) {},
-		SecondStrikeCallback:  func() {},
+		FirstStrikeCallback:   options.OnFirstStrikeTimeout,
+		SecondStrikeCallback:  options.OnSecondStrikeTimeout,
 	}
 }
 

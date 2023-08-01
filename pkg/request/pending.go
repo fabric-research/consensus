@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/SmartBFT-Go/consensus/pkg/api"
-
+	"github.com/SmartBFT-Go/consensus/pkg/types"
 	"github.com/pkg/errors"
 )
 
@@ -30,7 +30,7 @@ type PendingStore struct {
 	Inspector             api.RequestInspector
 	FirstStrikeThreshold  time.Duration
 	SecondStrikeThreshold time.Duration
-	FirstStrikeCallback   func([]byte)
+	FirstStrikeCallback   func([]byte, types.RequestInfo)
 	SecondStrikeCallback  func()
 	Time                  <-chan time.Time
 	StartTime             time.Time
@@ -173,7 +173,7 @@ func (ps *PendingStore) checkFirstStrike(now time.Time) {
 	go func() {
 		for _, bucket := range buckets {
 			bucket.requests.Range(func(_, v interface{}) bool {
-				ps.FirstStrikeCallback(v.([]byte))
+				ps.FirstStrikeCallback(v.([]byte), ps.Inspector.RequestID(v.([]byte)))
 				return true
 			})
 		}
@@ -185,8 +185,6 @@ func (ps *PendingStore) checkSecondStrike(now time.Time) bool {
 	ps.bucketsLock.RLock()
 	defer ps.bucketsLock.RUnlock()
 
-	var secondStrike bool
-
 	for _, bucket := range ps.buckets {
 		if bucket.firstStrikeTimestamp.IsZero() {
 			continue
@@ -196,10 +194,10 @@ func (ps *PendingStore) checkSecondStrike(now time.Time) bool {
 			continue
 		}
 
-		secondStrike = true
+		return true
 	}
 
-	return secondStrike
+	return false
 }
 
 func (ps *PendingStore) rotateBuckets(now time.Time) {

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SmartBFT-Go/consensus/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sync/semaphore"
 )
@@ -34,7 +35,7 @@ func TestPending(t *testing.T) {
 		},
 		StartTime: start,
 		Time:      ticker.C,
-		FirstStrikeCallback: func([]byte) {
+		FirstStrikeCallback: func([]byte, types.RequestInfo) {
 
 		},
 		Epoch:                 time.Millisecond * 200,
@@ -117,7 +118,7 @@ func TestGetAll(t *testing.T) {
 		},
 		StartTime: start,
 		Time:      ticker.C,
-		FirstStrikeCallback: func([]byte) {
+		FirstStrikeCallback: func([]byte, types.RequestInfo) {
 
 		},
 		Epoch:                 time.Millisecond * 200,
