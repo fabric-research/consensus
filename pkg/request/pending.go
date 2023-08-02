@@ -320,7 +320,7 @@ func (ps *PendingStore) now() time.Time {
 }
 
 // GetAllRequests returns all stored requests in the same order of their arrival, the oldest one will be the first
-func (ps *PendingStore) GetAllRequests(max int) [][]byte {
+func (ps *PendingStore) GetAllRequests(max uint64) [][]byte {
 
 	requests := make([][]byte, 0, max*2)
 

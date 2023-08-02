@@ -63,8 +63,8 @@ type requestItem struct {
 
 // PoolOptions is the pool configuration
 type PoolOptions struct {
-	MaxSize               int
-	BatchMaxSize          int
+	MaxSize               uint64
+	BatchMaxSize          uint64
 	BatchMaxSizeBytes     uint64
 	RequestMaxBytes       uint64
 	SubmitTimeout         time.Duration
@@ -259,6 +259,79 @@ func (rp *Pool) Prune(predicate func([]byte) error) { // TODO pruning after they
 	if err != nil {
 		rp.logger.Errorf("Couldn't remove pruned requests; error: %s", err)
 	}
+}
+
+// ResetPool resets the pool options
+func (rp *Pool) ResetPool(options PoolOptions, batching bool) {
+	defer atomic.StoreUint32(&rp.stopped, 0)
+
+	rp.Halt()
+
+	if options.MaxSize < rp.options.MaxSize {
+		rp.logger.Panicf("The new max size is smaller than the original max size")
+	}
+
+	requests := make([][]byte, 0, rp.options.MaxSize)
+	batchingWasEnabled := rp.isBatchingEnabled()
+	if batchingWasEnabled {
+		rp.batchStore.ForEach(func(_, v interface{}) {
+			requests = append(requests, v.(*requestItem).request)
+		})
+	} else {
+		rp.pending.Close()
+		requests = rp.pending.GetAllRequests(rp.options.MaxSize)
+	}
+
+	rp.batchStore = nil
+	rp.pending = nil
+
+	if options.SubmitTimeout == 0 {
+		options.SubmitTimeout = defaultSubmitTimeout
+	}
+	if options.BatchTimeout == 0 {
+		options.BatchTimeout = defaultBatchTimeout
+	}
+	if options.BatchMaxSize == 0 {
+		options.BatchMaxSize = 1000
+	}
+	if options.BatchMaxSizeBytes == 0 {
+		options.BatchMaxSizeBytes = 100000
+	}
+	if options.MaxSize == 0 {
+		options.MaxSize = 10000
+	}
+	if options.RequestMaxBytes == 0 {
+		options.RequestMaxBytes = defaultMaxBytes
+	}
+
+	rp.options = options
+	rp.semaphore = semaphore.NewWeighted(int64(options.MaxSize))
+
+	if batching {
+		rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
+			rp.semaphore.Release(1)
+		})
+		for _, req := range requests {
+			reqInfo := rp.inspector.RequestID(req)
+			if err := rp.submitToBatchStore(reqInfo.ID, req); err != nil {
+				rp.logger.Errorf("Could not submit request into batch store; error: %s", err)
+				return
+			}
+		}
+	} else {
+		rp.pending = createPendingStore(rp.logger, rp.inspector, rp.options)
+		rp.pending.Init()
+		for _, req := range requests {
+			ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
+			if err := rp.pending.Submit(req, ctx); err != nil {
+				rp.logger.Errorf("Could not submit request into pending store; error: %s", err)
+				return
+			}
+			cancel()
+		}
+		rp.pending.Start()
+	}
+
 }
 
 // Close closes the pool

@@ -15,7 +15,7 @@ type BatchStore struct {
 	currentBatch      *batch
 	readyBatches      []*batch
 	onDelete          func(key string)
-	batchMaxSize      uint32
+	batchMaxSize      uint64
 	batchMaxSizeBytes uint64
 	keys2Batches      sync.Map
 	lock              sync.RWMutex
@@ -24,7 +24,7 @@ type BatchStore struct {
 
 type batch struct {
 	lock      sync.RWMutex
-	size      uint32
+	size      uint64
 	sizeBytes uint64
 	enqueued  bool
 	m         map[any]any
@@ -72,11 +72,11 @@ func (b *batch) Delete(key any) {
 	delete(b.m, key)
 }
 
-func NewBatchStore(batchMaxSize int, batchMaxSizeBytes uint64, onDelete func(string)) *BatchStore {
+func NewBatchStore(batchMaxSize uint64, batchMaxSizeBytes uint64, onDelete func(string)) *BatchStore {
 	bs := &BatchStore{
 		currentBatch:      &batch{m: make(map[any]any, batchMaxSize*2)},
 		onDelete:          onDelete,
-		batchMaxSize:      uint32(batchMaxSize),
+		batchMaxSize:      batchMaxSize,
 		batchMaxSizeBytes: batchMaxSizeBytes,
 	}
 	bs.signal = sync.Cond{L: &bs.lock}
@@ -100,7 +100,7 @@ func (bs *BatchStore) Insert(key string, value interface{}, size uint64) bool {
 		// Try to add to the current batch. It doesn't matter if we don't end up using it,
 		// we only care about if it's higher than the limit or not.
 		bs.lock.RLock()
-		full := atomic.AddUint32(&bs.currentBatch.size, 1) > bs.batchMaxSize
+		full := atomic.AddUint64(&bs.currentBatch.size, 1) > bs.batchMaxSize
 		fullBytes := atomic.AddUint64(&bs.currentBatch.sizeBytes, size) > bs.batchMaxSizeBytes
 		currBatch := bs.currentBatch
 
@@ -203,7 +203,7 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 		// But if no full batch can be found, use the non-empty one
 		returnedBatch := bs.currentBatch
 		// If no request is found, return nil
-		if atomic.LoadUint32(&returnedBatch.size) == 0 {
+		if atomic.LoadUint64(&returnedBatch.size) == 0 {
 			return nil
 		}
 		// Mark the current batch as empty, since we are returning its content

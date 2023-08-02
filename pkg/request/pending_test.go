@@ -142,7 +142,7 @@ func TestGetAll(t *testing.T) {
 	}
 
 	ps.Close()
-	all := ps.GetAllRequests(count)
+	all := ps.GetAllRequests(uint64(count))
 	assert.Equal(t, count, len(all))
 
 }
