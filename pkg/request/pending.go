@@ -60,10 +60,10 @@ func (ps *PendingStore) Restart() {
 	ps.Stop()
 	now := ps.now()
 	ps.bucketsLock.RLock()
+	defer ps.bucketsLock.RUnlock()
 	for _, bucket := range ps.buckets {
 		bucket.changeLastTimestamp(now)
 	}
-	ps.bucketsLock.RUnlock()
 	atomic.StoreUint32(&ps.stopped, 0)
 }
 
@@ -325,13 +325,14 @@ func (ps *PendingStore) GetAllRequests(max uint64) [][]byte {
 	requests := make([][]byte, 0, max*2)
 
 	ps.bucketsLock.RLock()
+	defer ps.bucketsLock.RUnlock()
+
 	for _, b := range ps.buckets {
 		b.requests.Range(func(_, v interface{}) bool {
 			requests = append(requests, v.([]byte))
 			return true
 		})
 	}
-	ps.bucketsLock.RUnlock()
 
 	currentBucket := ps.currentBucket.Load().(*bucket)
 	currentBucket.requests.Range(func(_, v interface{}) bool {

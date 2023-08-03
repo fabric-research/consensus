@@ -261,8 +261,8 @@ func (rp *Pool) Prune(predicate func([]byte) error) { // TODO pruning after they
 	}
 }
 
-// ResetPool resets the pool options
-func (rp *Pool) ResetPool(options PoolOptions, batching bool) {
+// Reset resets the pool
+func (rp *Pool) Reset(options PoolOptions, batching bool) {
 	defer atomic.StoreUint32(&rp.stopped, 0)
 
 	rp.Halt()
