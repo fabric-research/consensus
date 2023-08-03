@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/SmartBFT-Go/consensus/pkg/api"
-	"github.com/SmartBFT-Go/consensus/pkg/types"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/semaphore"
 )
@@ -69,7 +68,7 @@ type PoolOptions struct {
 	RequestMaxBytes       uint64
 	SubmitTimeout         time.Duration
 	BatchTimeout          time.Duration
-	OnFirstStrikeTimeout  func([]byte, types.RequestInfo)
+	OnFirstStrikeTimeout  func([]byte)
 	FirstStrikeThreshold  time.Duration
 	OnSecondStrikeTimeout func()
 	SecondStrikeThreshold time.Duration

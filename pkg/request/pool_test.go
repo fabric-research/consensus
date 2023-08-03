@@ -57,7 +57,7 @@ func TestRequestPool(t *testing.T) {
 		AutoRemoveTimeout:     time.Second * 10,
 		SubmitTimeout:         time.Second * 10,
 		BatchTimeout:          time.Second,
-		OnFirstStrikeTimeout: func(_ []byte, _ bft.RequestInfo) {
+		OnFirstStrikeTimeout: func(_ []byte) {
 			panic("timed out on request")
 		},
 	})
