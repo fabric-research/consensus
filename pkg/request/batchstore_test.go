@@ -41,8 +41,8 @@ func TestBatch(t *testing.T) {
 				binary.BigEndian.PutUint32(key, uint32(worker))
 				binary.BigEndian.PutUint32(key[4:], uint32(i))
 				keyID := requestInspector.RequestID(key)
-				b.Store(keyID.ID, struct{}{})
-				loaded <- keyID.ID
+				b.Store(keyID, struct{}{})
+				loaded <- keyID
 			}
 		}(worker)
 	}
@@ -70,10 +70,10 @@ func TestBatch(t *testing.T) {
 				binary.BigEndian.PutUint32(key, uint32(worker))
 				binary.BigEndian.PutUint32(key[4:], uint32(i))
 				keyID := requestInspector.RequestID(key)
-				if _, ok := b.Load(keyID.ID); !ok {
+				if _, ok := b.Load(keyID); !ok {
 					break
 				}
-				b.Delete(keyID.ID)
+				b.Delete(keyID)
 			}
 		}(worker)
 	}

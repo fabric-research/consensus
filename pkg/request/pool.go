@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/SmartBFT-Go/consensus/pkg/api"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/semaphore"
 )
@@ -38,6 +37,12 @@ type Logger interface {
 	Panicf(template string, args ...interface{})
 }
 
+// RequestInspector extracts the id of a given request.
+type RequestInspector interface {
+	// RequestID returns the id of the given request.
+	RequestID(req []byte) string
+}
+
 // Pool implements requests pool, maintains pool of given size provided during
 // construction. In case there are more incoming request than the given size it will
 // block during submit until there will be space to submit new ones.
@@ -46,7 +51,7 @@ type Pool struct {
 	timestamp       uint64
 	pending         *PendingStore
 	logger          Logger
-	inspector       api.RequestInspector
+	inspector       RequestInspector
 	options         PoolOptions
 	batchStore      *BatchStore
 	semaphore       *semaphore.Weighted
@@ -76,7 +81,7 @@ type PoolOptions struct {
 }
 
 // NewPool constructs a new requests pool
-func NewPool(log Logger, inspector api.RequestInspector, options PoolOptions) *Pool {
+func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool {
 
 	// TODO check pool options
 
@@ -128,7 +133,7 @@ func (rp *Pool) Start(batching bool) {
 	rp.pending.Start()
 }
 
-func createPendingStore(log Logger, inspector api.RequestInspector, options PoolOptions) *PendingStore {
+func createPendingStore(log Logger, inspector RequestInspector, options PoolOptions) *PendingStore {
 	return &PendingStore{
 		Inspector:             inspector,
 		ReqIDGCInterval:       options.AutoRemoveTimeout / 4,
@@ -159,17 +164,17 @@ func (rp *Pool) Submit(request []byte) error {
 		)
 	}
 
-	reqInfo := rp.inspector.RequestID(request)
+	reqID := rp.inspector.RequestID(request)
 
 	if !rp.isBatchingEnabled() {
 		ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
 		defer cancel()
 
-		rp.logger.Debugf("Submitted request %s to pending store", reqInfo.ID)
+		rp.logger.Debugf("Submitted request %s to pending store", reqID)
 		return rp.pending.Submit(request, ctx)
 	}
 
-	return rp.submitToBatchStore(reqInfo.ID, request)
+	return rp.submitToBatchStore(reqID, request)
 }
 
 func (rp *Pool) submitToBatchStore(reqID string, request []byte) error {
@@ -243,14 +248,14 @@ func (rp *Pool) Prune(predicate func([]byte) error) { // TODO pruning after they
 		rp.batchStore.ForEach(func(_, v interface{}) {
 			req := v.(*requestItem).request
 			if predicate(req) != nil {
-				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req).ID)
+				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req))
 			}
 		})
 	} else {
 		requests := rp.pending.GetAllRequests(rp.options.MaxSize)
 		for _, req := range requests {
 			if predicate(req) != nil {
-				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req).ID)
+				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req))
 			}
 		}
 	}
@@ -312,7 +317,7 @@ func (rp *Pool) Reset(options PoolOptions, batching bool) {
 		})
 		for _, req := range requests {
 			reqInfo := rp.inspector.RequestID(req)
-			if err := rp.submitToBatchStore(reqInfo.ID, req); err != nil {
+			if err := rp.submitToBatchStore(reqInfo, req); err != nil {
 				rp.logger.Errorf("Could not submit request into batch store; error: %s", err)
 				return
 			}
@@ -324,6 +329,7 @@ func (rp *Pool) Reset(options PoolOptions, batching bool) {
 			ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
 			if err := rp.pending.Submit(req, ctx); err != nil {
 				rp.logger.Errorf("Could not submit request into pending store; error: %s", err)
+				cancel()
 				return
 			}
 			cancel()
@@ -412,6 +418,7 @@ func (rp *Pool) moveToPendingStore() {
 		ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
 		if err := rp.pending.Submit(req, ctx); err != nil {
 			rp.logger.Errorf("Could not submit request into pending store; error: %s", err)
+			cancel()
 			return
 		}
 		cancel()
@@ -429,7 +436,7 @@ func (rp *Pool) moveToBatchStore() {
 	})
 	for _, req := range requests {
 		reqInfo := rp.inspector.RequestID(req)
-		if err := rp.submitToBatchStore(reqInfo.ID, req); err != nil {
+		if err := rp.submitToBatchStore(reqInfo, req); err != nil {
 			rp.logger.Errorf("Could not submit request into batch store; error: %s", err)
 			return
 		}

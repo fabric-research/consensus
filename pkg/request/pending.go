@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/SmartBFT-Go/consensus/pkg/api"
 	"github.com/pkg/errors"
 )
 
@@ -26,7 +25,7 @@ type PendingStore struct {
 	ReqIDGCInterval       time.Duration
 	ReqIDLifetime         time.Duration
 	Logger                Logger
-	Inspector             api.RequestInspector
+	Inspector             RequestInspector
 	FirstStrikeThreshold  time.Duration
 	SecondStrikeThreshold time.Duration
 	FirstStrikeCallback   func([]byte)
@@ -294,10 +293,10 @@ func (ps *PendingStore) Submit(request []byte, ctx context.Context) error {
 		return err
 	}
 
-	reqInfo := ps.Inspector.RequestID(request)
+	reqID := ps.Inspector.RequestID(request)
 
-	if _, loaded := ps.processed.LoadOrStore(reqInfo.ID, ps.now()); loaded {
-		ps.Logger.Debugf("request %s already processed", reqInfo.ID)
+	if _, loaded := ps.processed.LoadOrStore(reqID, ps.now()); loaded {
+		ps.Logger.Debugf("request %s already processed", reqID)
 		ps.Semaphore.Release(1)
 		return nil
 	}
@@ -306,7 +305,7 @@ func (ps *PendingStore) Submit(request []byte, ctx context.Context) error {
 	// In such a case, wait for a new un-sealed bucket to replace the current bucket.
 	for {
 		currentBucket := ps.currentBucket.Load().(*bucket)
-		if !currentBucket.TryInsert(reqInfo.ID, request) {
+		if !currentBucket.TryInsert(reqID, request) {
 			continue
 		}
 		return nil

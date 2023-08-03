@@ -17,8 +17,6 @@ import (
 	"testing"
 	"time"
 
-	bft "github.com/SmartBFT-Go/consensus/pkg/types"
-
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -27,9 +25,9 @@ import (
 type reqInspector struct {
 }
 
-func (ri *reqInspector) RequestID(req []byte) bft.RequestInfo {
+func (ri *reqInspector) RequestID(req []byte) string {
 	digest := sha256.Sum256(req)
-	return bft.RequestInfo{ID: hex.EncodeToString(digest[:])}
+	return hex.EncodeToString(digest[:])
 }
 
 func TestRequestPool(t *testing.T) {
@@ -115,7 +113,7 @@ func removeRequests(workerNum int, batch [][]byte, requestInspector *reqInspecto
 				if i%workerNum != workerID {
 					continue
 				}
-				reqInfos = append(reqInfos, requestInspector.RequestID(req).ID)
+				reqInfos = append(reqInfos, requestInspector.RequestID(req))
 			}
 
 			pool.RemoveRequests(reqInfos...)
@@ -388,7 +386,7 @@ func TestBasicPrune(t *testing.T) {
 	}
 
 	pool.Prune(func(req []byte) error {
-		ID := insp.RequestID(req).ID
+		ID := insp.RequestID(req)
 		if ID == "5" {
 			return errors.New("remove")
 		}
@@ -408,7 +406,7 @@ func TestBasicPrune(t *testing.T) {
 	}
 
 	pool.Prune(func(req []byte) error {
-		ID := insp.RequestID(req).ID
+		ID := insp.RequestID(req)
 		if ID == "3" || ID == "4" {
 			return errors.New("remove")
 		}
@@ -454,7 +452,7 @@ func parseTestRequest(request []byte) (txID, data string) {
 
 type testRequestInspector struct{}
 
-func (ins *testRequestInspector) RequestID(req []byte) bft.RequestInfo {
+func (ins *testRequestInspector) RequestID(req []byte) string {
 	ID, _ := parseTestRequest(req)
-	return bft.RequestInfo{ID: ID}
+	return ID
 }

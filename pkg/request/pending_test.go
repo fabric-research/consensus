@@ -68,7 +68,7 @@ func TestPending(t *testing.T) {
 
 				reqID := requestInspector.RequestID(req)
 
-				reqIDsSent <- reqID.ID
+				reqIDsSent <- reqID
 
 				atomic.AddUint32(&submittedCount, 1)
 				if err := ps.Submit(req, context.Background()); err != nil {
