@@ -22,7 +22,7 @@ import (
 
 // ViewController controls the view
 //
-//go:generate mockery -dir . -name ViewController -case underscore -output ./mocks/
+//go:generate mockery --dir . --name ViewController --case underscore --output ./mocks/
 type ViewController interface {
 	ViewChanged(newViewNumber uint64, newProposalSequence uint64)
 	AbortView(view uint64)
@@ -30,14 +30,14 @@ type ViewController interface {
 
 // Pruner prunes revoked requests
 //
-//go:generate mockery -dir . -name Pruner -case underscore -output ./mocks/
+//go:generate mockery --dir . --name Pruner --case underscore --output ./mocks/
 type Pruner interface {
 	MaybePruneRevokedRequests()
 }
 
 // RequestsTimer controls requests
 //
-//go:generate mockery -dir . -name RequestsTimer -case underscore -output ./mocks/
+//go:generate mockery --dir . --name RequestsTimer --case underscore --output ./mocks/
 type RequestsTimer interface {
 	StopTimers()
 	RestartTimers()
