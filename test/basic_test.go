@@ -1270,6 +1270,10 @@ func TestLeaderCatchUpWithoutSync(t *testing.T) {
 	restartWG := sync.WaitGroup{}
 	restartWG.Add(1)
 
+	exitOnce := sync.Once{}
+	exitWG := sync.WaitGroup{}
+	exitWG.Add(1)
+
 	restoredWG := sync.WaitGroup{}
 	restoredWG.Add(1)
 
@@ -1277,6 +1281,12 @@ func TestLeaderCatchUpWithoutSync(t *testing.T) {
 	nodes[0].logger = baseLogger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
 		if strings.Contains(entry.Message, "Processed prepares for proposal with seq 1") {
 			restartWG.Done()
+			exitWG.Wait()
+		}
+		if strings.Contains(entry.Message, "Exiting") {
+			exitOnce.Do(func() {
+				exitWG.Done()
+			})
 		}
 		if strings.Contains(entry.Message, "Restored proposal with sequence 1") {
 			restoredWG.Done()
@@ -1336,6 +1346,10 @@ func TestLeaderProposeAfterRestartWithoutSync(t *testing.T) {
 	restartWG := sync.WaitGroup{}
 	restartWG.Add(1)
 
+	exitOnce := sync.Once{}
+	exitWG := sync.WaitGroup{}
+	exitWG.Add(1)
+
 	restoredWG := sync.WaitGroup{}
 	restoredWG.Add(1)
 
@@ -1346,6 +1360,12 @@ func TestLeaderProposeAfterRestartWithoutSync(t *testing.T) {
 	nodes[0].logger = baseLogger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
 		if strings.Contains(entry.Message, "Processed prepares for proposal with seq 1") {
 			restartWG.Done()
+			exitWG.Wait()
+		}
+		if strings.Contains(entry.Message, "Exiting") {
+			exitOnce.Do(func() {
+				exitWG.Done()
+			})
 		}
 		if strings.Contains(entry.Message, "Restored proposal with sequence 1") {
 			restoredWG.Done()
