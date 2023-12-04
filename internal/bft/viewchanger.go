@@ -1342,7 +1342,13 @@ func (v *ViewChanger) Decide(proposal types.Proposal, signatures []types.Signatu
 		}
 	}
 	v.Pruner.MaybePruneRevokedRequests()
-	v.inFlightDecideChan <- struct{}{}
+
+	select {
+	case v.inFlightDecideChan <- struct{}{}:
+		return
+	case <-v.stopChan:
+		return
+	}
 }
 
 // Complain panics when a view change is requested
