@@ -603,6 +603,8 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 		}
 	}
 
+	// TODO consider rearranging this function
+
 	decision := syncResponse.Latest
 	if decision.Proposal.Metadata == nil {
 		c.Logger.Infof("Synchronizer returned with proposal metadata nil")
@@ -635,6 +637,13 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 	}
 
 	latestSequence := c.latestSeq()
+
+	if md.LatestSequence >= latestSequence {
+		c.Logger.Infof("Synchronizer returned with sequence %d while the controller is at sequence %d", md.LatestSequence, latestSequence)
+		c.Logger.Debugf("Node %d is setting the checkpoint after sync returned with view %d and seq %d", c.ID, md.ViewId, md.LatestSequence)
+		c.Checkpoint.Set(decision.Proposal, decision.Signatures)
+		c.verificationSequence = uint64(decision.Proposal.VerificationSequence)
+	}
 
 	if md.ViewId < c.currViewNumber {
 		c.Logger.Infof("Synchronizer returned with view number %d but the controller is at view number %d", md.ViewId, c.currViewNumber)
@@ -692,11 +701,9 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 		}
 	}
 
-	c.Logger.Debugf("Node %d is setting the checkpoint after sync to view %d and seq %d", c.ID, md.ViewId, md.LatestSequence)
-	c.Checkpoint.Set(decision.Proposal, decision.Signatures)
-	c.verificationSequence = uint64(decision.Proposal.VerificationSequence)
 	c.Logger.Debugf("Node %d is informing the view changer after sync of view %d and seq %d", c.ID, md.ViewId, md.LatestSequence)
 	c.ViewChanger.InformNewView(view)
+
 	if md.LatestSequence == 0 || newView {
 		return view, md.LatestSequence + 1, 0
 	}

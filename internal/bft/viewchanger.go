@@ -385,7 +385,7 @@ func (v *ViewChanger) startViewChange(change *change) {
 	v.Comm.BroadcastConsensus(msg)
 	v.Logger.Debugf("Node %d started view change, last view is %d", v.SelfID, v.currView)
 	if change.stopView {
-		v.Controller.AbortView(v.currView) // abort the current view when joining view change
+		v.Controller.AbortView(v.currView) // abort the current view when joining view change // TODO maybe abort before sending view data
 	}
 	v.startViewChangeTime = v.lastTick
 	v.checkTimeout = true
