@@ -1181,7 +1181,14 @@ func TestRotateFromFollowerToLeader(t *testing.T) {
 
 func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 
-	// TODO add comments
+	// In this scenario a decision is delivered twice.
+	// Once by the synchronizer and a second time by the view data received during a view change.
+	// In the beginning there is a view change timeout and there is a view still running concurrently.
+	// Afterwards the view change is successful, but it does not include a decision made during the concurrent view.
+	// Later there is a second view change timeout and the synchronizer is called and delivers the decision.
+	// The checkpoint should be updated accordingly.
+	// Then the node receives a view data message which include the decision.
+	// If the checkpoint was updated correctly then this decision should not be delivered twice.
 
 	basicLog, err := zap.NewDevelopment()
 	assert.NoError(t, err)
@@ -1199,6 +1206,7 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	comm.On("SendConsensus", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		commSendWG.Done()
 	})
+
 	reqTimer := &mocks.RequestsTimer{}
 	reqTimer.On("StopTimers")
 	reqTimer.On("RestartTimers")
@@ -1242,6 +1250,16 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	leaderMon.On("InjectArtificialHeartbeat", uint64(1), mock.Anything)
 	leaderMon.On("Close")
 
+	collector := bft.StateCollector{
+		SelfID:         4,
+		N:              7,
+		Logger:         log,
+		CollectTimeout: 100 * time.Millisecond,
+	}
+	collector.Start()
+
+	// The synchronizer returns on the first call a proposal with sequence 0 and on the second call a proposal with sequence 1.
+	// In both times the synchronizer is called after a view change timeout.
 	synchronizer := &mocks.SynchronizerMock{}
 	synchronizerWG := sync.WaitGroup{}
 	synchronizer.On("Sync").Run(func(args mock.Arguments) {
@@ -1273,14 +1291,8 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		},
 	}, Reconfig: types.ReconfigSync{InReplicatedDecisions: false}}).Once()
 
-	collector := bft.StateCollector{
-		SelfID:         4,
-		N:              7,
-		Logger:         log,
-		CollectTimeout: 100 * time.Millisecond,
-	}
-	collector.Start()
-
+	// If deliver is called with sequence 1 then the test fails.
+	// This is after the synchronizer returns with sequence 1.
 	app := &mocks.ApplicationMock{}
 	app.On("Deliver", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		proposal := args.Get(0).(types.Proposal)
@@ -1351,6 +1363,8 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	controller.Start(0, 1, 0, false)
 	leaderMonWG.Wait()
 
+	// Starting view change
+
 	startTime := time.Now()
 	vc.StartViewChange(1, true)
 
@@ -1360,6 +1374,8 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	commSendWG.Add(1) // sending view data msg and joining the view change
 	vc.HandleMessage(5, viewChangeMsg)
 	commSendWG.Wait()
+
+	// View change timeout, synchronizer is called
 
 	synchronizerWG.Add(1)
 	commSendWG.Add(6) // fetch and send state after sync
@@ -1374,6 +1390,8 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	synchronizer.AssertNumberOfCalls(t, "Sync", 1)
 	leaderMonWG.Wait()
 
+	// Concurrent view is running and a decision is delivered (by the other nodes)
+
 	commSendWG.Add(6) // send prepares
 	controller.ProcessMessages(1, prePrepareSeq1View0)
 	commSendWG.Wait()
@@ -1385,11 +1403,15 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	controller.ProcessMessages(7, prepareSeq1View0)
 	commSendWG.Wait()
 
+	// A view change occurs (the new view message does not include the decision made by the concurrent view)
+
 	verifierSigWG.Add(5)
 	leaderMonWG.Add(1)
 	vc.HandleMessage(2, createNewViewMsgForDeliverTwiceTest(1))
 	verifierSigWG.Wait() // got the new view msg
 	leaderMonWG.Wait()   // changed view and created the view
+
+	// Starting another view change
 
 	startTime = time.Now()
 	vc.StartViewChange(2, true)
@@ -1402,6 +1424,9 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	commSendWG.Add(1) // sending view data msg and joining the view change
 	vc.HandleMessage(5, viewChangeMsg2)
 	commSendWG.Wait()
+
+	// Again there is a view change timeout
+	// The synchronizer returns the decision
 
 	synchronizerWG.Add(1)
 	commSendWG.Add(6) // fetch and send state after sync
@@ -1416,6 +1441,8 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	commSendWG.Wait()
 	synchronizer.AssertNumberOfCalls(t, "Sync", 2)
 
+	// The view change continues
+
 	viewChangeMsg3 := proto.Clone(viewChangeMsg).(*protos.Message)
 	viewChangeMsg3.GetViewChange().NextView = 3
 	vc.HandleMessage(1, viewChangeMsg3)
@@ -1423,19 +1450,10 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	vc.HandleMessage(3, viewChangeMsg3)
 	vc.HandleMessage(5, viewChangeMsg3)
 
-	viewData := createViewDataForDeliverTwiceTest(3, 1)
-	vdBytes := bft.MarshalOrPanic(viewData)
-	viewDataMsg1 := &protos.Message{
-		Content: &protos.Message_ViewData{
-			ViewData: &protos.SignedViewData{
-				RawViewData: vdBytes,
-				Signer:      1,
-				Signature:   nil,
-			},
-		},
-	}
+	// The node receives a view data message which includes the decision
+
 	verifierSigWG.Add(1)
-	vc.HandleMessage(1, viewDataMsg1)
+	vc.HandleMessage(1, viewDataMsgSeq1View3)
 	verifierSigWG.Wait()
 
 	controller.Stop()
@@ -1477,6 +1495,16 @@ var (
 				View:   0,
 				Seq:    1,
 				Digest: proposalSeq1View0.Digest(),
+			},
+		},
+	}
+	viewDataSeq1View3    = createViewDataForDeliverTwiceTest(3, 1)
+	viewDataMsgSeq1View3 = &protos.Message{
+		Content: &protos.Message_ViewData{
+			ViewData: &protos.SignedViewData{
+				RawViewData: bft.MarshalOrPanic(viewDataSeq1View3),
+				Signer:      1,
+				Signature:   nil,
 			},
 		},
 	}
