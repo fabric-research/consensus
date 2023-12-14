@@ -76,6 +76,9 @@ func TestNodeViewChangeWhileInPartition(t *testing.T) {
 	var viewChangeTimeoutWG sync.WaitGroup
 	viewChangeTimeoutWG.Add(1)
 
+	var viewChangeWG sync.WaitGroup
+	viewChangeWG.Add(1)
+
 	var syncWG sync.WaitGroup
 	syncWG.Add(1)
 
@@ -89,6 +92,10 @@ func TestNodeViewChangeWhileInPartition(t *testing.T) {
 
 		if strings.Contains(entry.Message, "Node 4 is setting the checkpoint after sync returned with view 0 and seq 1") {
 			syncWG.Done()
+		}
+
+		if strings.Contains(entry.Message, "ViewChanged, the new view is 1") {
+			viewChangeWG.Done()
 		}
 
 		return nil
@@ -134,6 +141,8 @@ func TestNodeViewChangeWhileInPartition(t *testing.T) {
 	syncWG.Wait()
 	// Ensure the last node successfully delivers the block to the application
 	<-nodes[len(nodes)-1].Delivered
+	// Make sure view change occurred
+	viewChangeWG.Wait()
 }
 
 func TestRestartFollowers(t *testing.T) {
