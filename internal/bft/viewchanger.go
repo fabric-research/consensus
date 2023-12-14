@@ -385,7 +385,7 @@ func (v *ViewChanger) startViewChange(change *change) {
 	v.Comm.BroadcastConsensus(msg)
 	v.Logger.Debugf("Node %d started view change, last view is %d", v.SelfID, v.currView)
 	if change.stopView {
-		v.Controller.AbortView(v.currView) // abort the current view when joining view change // TODO maybe abort before sending view data
+		v.Controller.AbortView(v.currView) // abort the current view when joining view change
 	}
 	v.startViewChangeTime = v.lastTick
 	v.checkTimeout = true
@@ -416,6 +416,7 @@ func (v *ViewChanger) processViewChangeMsg(restore bool) {
 			v.Logger.Panicf("Failed to save message to state, error: %v", err)
 		}
 	}
+	v.Controller.AbortView(v.currView) // before preparing the view data message abort the current view
 	v.currView = v.nextView
 	v.MetricsViewChange.CurrentView.Set(float64(v.currView))
 	v.viewChangeMsgs.clear(v.N)

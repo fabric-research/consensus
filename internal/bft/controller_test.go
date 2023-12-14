@@ -1430,6 +1430,7 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 
 	synchronizerWG.Add(1)
 	commSendWG.Add(6) // fetch and send state after sync
+	leaderMonWG.Add(1)
 	ticker <- startTime.Add(5 * time.Second)
 	ticker <- startTime.Add(10 * time.Second)
 	ticker <- startTime.Add(9 * time.Second)
@@ -1439,6 +1440,7 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 	ticker <- startTime.Add(25 * time.Second) // view change timeout (with backoff)
 	synchronizerWG.Wait()
 	commSendWG.Wait()
+	leaderMonWG.Wait() // change view after sync returns
 	synchronizer.AssertNumberOfCalls(t, "Sync", 2)
 
 	// The view change continues
