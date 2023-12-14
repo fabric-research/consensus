@@ -625,7 +625,7 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 
 	latestSequence := c.latestSeq()
 
-	if md.LatestSequence >= latestSequence {
+	if md.LatestSequence > latestSequence {
 		c.Logger.Infof("Synchronizer returned with sequence %d while the controller is at sequence %d", md.LatestSequence, latestSequence)
 		c.Logger.Debugf("Node %d is setting the checkpoint after sync returned with view %d and seq %d", c.ID, md.ViewId, md.LatestSequence)
 		c.Checkpoint.Set(decision.Proposal, decision.Signatures)
