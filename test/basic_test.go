@@ -1077,7 +1077,7 @@ func TestFollowerStateTransfer(t *testing.T) {
 	syncedWG.Add(1)
 	baseLogger6 := nodes[6].logger.Desugar()
 	nodes[6].logger = baseLogger6.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
-		if strings.Contains(entry.Message, "The collected state") {
+		if strings.Contains(entry.Message, "collected state") {
 			syncedWG.Done()
 		}
 		return nil
@@ -2747,7 +2747,7 @@ func TestFetchStateWhenSyncReturnsPrevView(t *testing.T) {
 				}
 			}
 
-			if strings.Contains(entry.Message, "Collected state with view 2 and sequence 2") {
+			if strings.Contains(entry.Message, "collected state with view 2 and sequence 2") {
 				stateWG.Done()
 			}
 
