@@ -593,7 +593,7 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 	}
 
 	// The synchronizer returns a response which includes the latest decision with its proposal metadata.
-	// This proposal may be empty (its metadata is nil), meaning the synchronizer is not aware of any decisions made.
+	// This proposal may be empty (its metadata is empty), meaning the synchronizer is not aware of any decisions made.
 	// Otherwise, the latest proposal sequence returned may be higher than our latest sequence, meaning we should
 	// update the checkpoint.
 	// In other cases we should not update the checkpoint.
@@ -605,8 +605,8 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 	latestDecision := syncResponse.Latest
 	var latestDecisionSeq, latestDecisionViewNum, latestDecisionDecisions uint64
 	var latestDecisionMetadata *protos.ViewMetadata
-	if latestDecision.Proposal.Metadata == nil {
-		c.Logger.Infof("Synchronizer returned with proposal metadata nil")
+	if len(latestDecision.Proposal.Metadata) == 0 {
+		c.Logger.Infof("Synchronizer returned with an empty proposal metadata")
 		latestDecisionMetadata = nil
 	} else {
 		md := &protos.ViewMetadata{}
