@@ -47,8 +47,7 @@ type RequestInspector interface {
 // construction. In case there are more incoming request than the given size it will
 // block during submit until there will be space to submit new ones.
 type Pool struct {
-	lock            sync.Mutex
-	timestamp       uint64
+	lock            sync.RWMutex
 	pending         *PendingStore
 	logger          Logger
 	inspector       RequestInspector
@@ -111,18 +110,18 @@ func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool 
 		options:   options,
 	}
 
+	rp.start()
+
 	return rp
 }
 
-func (rp *Pool) Start(batching bool) {
+func (rp *Pool) start() {
+	rp.lock.Lock()
+	defer rp.lock.Unlock()
 
-	if batching {
-		rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
-			rp.semaphore.Release(1)
-		})
-		rp.setBatching(batching)
-		return
-	}
+	rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
+		rp.semaphore.Release(1)
+	})
 
 	rp.pending = createPendingStore(rp.logger, rp.inspector, rp.options)
 	if rp.options.OnFirstStrikeTimeout != nil {
@@ -152,6 +151,9 @@ func createPendingStore(log Logger, inspector RequestInspector, options PoolOpti
 
 // Submit a request into the pool, returns an error when request is already in the pool
 func (rp *Pool) Submit(request []byte) error {
+	rp.lock.RLock()
+	defer rp.lock.RUnlock()
+
 	if rp.isClosed() || rp.isStopped() {
 		return errors.Errorf("pool halted or closed, request rejected")
 	}
@@ -207,6 +209,8 @@ func (rp *Pool) submitToBatchStore(reqID string, request []byte) error {
 
 // NextRequests returns the next requests to be batched.
 func (rp *Pool) NextRequests() [][]byte {
+	rp.lock.RLock()
+	defer rp.lock.RUnlock()
 
 	if rp.isClosed() || rp.isStopped() {
 		rp.logger.Warnf("pool halted or closed, returning nil")
@@ -230,19 +234,25 @@ func (rp *Pool) NextRequests() [][]byte {
 	return rawRequests
 }
 
-func (rp *Pool) RemoveRequests(requestsIDs ...string) error {
+func (rp *Pool) RemoveRequests(requestsIDs ...string) {
+	rp.lock.RLock()
+	defer rp.lock.RUnlock()
+
 	if !rp.isBatchingEnabled() {
 		rp.pending.RemoveRequests(requestsIDs...)
-		return nil
+		return
 	}
 
 	for _, requestID := range requestsIDs {
 		rp.batchStore.Remove(requestID)
 	}
-	return nil
+	return
 }
 
 func (rp *Pool) Prune(predicate func([]byte) error) { // TODO pruning after they are batched already might be an issue
+	rp.lock.RLock()
+	defer rp.lock.RUnlock()
+
 	requestsToRemove := make([]string, 0, rp.options.MaxSize)
 	if rp.isBatchingEnabled() {
 		rp.batchStore.ForEach(func(_, v interface{}) {
@@ -259,14 +269,14 @@ func (rp *Pool) Prune(predicate func([]byte) error) { // TODO pruning after they
 			}
 		}
 	}
-	err := rp.RemoveRequests(requestsToRemove...)
-	if err != nil {
-		rp.logger.Errorf("Couldn't remove pruned requests; error: %s", err)
-	}
+	rp.RemoveRequests(requestsToRemove...)
 }
 
 // Reset resets the pool
 func (rp *Pool) Reset(options PoolOptions, batching bool) {
+	rp.lock.Lock()
+	defer rp.lock.Unlock()
+
 	defer atomic.StoreUint32(&rp.stopped, 0)
 
 	rp.Halt()
@@ -311,6 +321,7 @@ func (rp *Pool) Reset(options PoolOptions, batching bool) {
 	rp.options = options
 	rp.semaphore = semaphore.NewWeighted(int64(options.MaxSize))
 
+	rp.setBatching(batching)
 	if batching {
 		rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
 			rp.semaphore.Release(1)
@@ -342,6 +353,9 @@ func (rp *Pool) Reset(options PoolOptions, batching bool) {
 // Close closes the pool
 func (rp *Pool) Close() {
 	atomic.StoreUint32(&rp.closed, 1)
+	if !rp.isBatchingEnabled() {
+		rp.pending.Close()
+	}
 	// TODO need to remove all requests?
 }
 
@@ -364,6 +378,8 @@ func (rp *Pool) isStopped() bool {
 // Restart restarts the pool.
 // When batching is set to true the pool is expected to respond to NextRequests.
 func (rp *Pool) Restart(batching bool) {
+	rp.lock.Lock()
+	defer rp.lock.Unlock()
 
 	defer atomic.StoreUint32(&rp.stopped, 0)
 

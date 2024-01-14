@@ -93,8 +93,8 @@ func TestStartViewChange(t *testing.T) {
 	comm.On("BroadcastConsensus", mock.Anything).Run(func(args mock.Arguments) {
 		msgChan <- args.Get(0).(*protos.Message)
 	})
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers").Once()
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt").Once()
 	basicLog, err := zap.NewDevelopment()
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
@@ -102,14 +102,14 @@ func TestStartViewChange(t *testing.T) {
 	controller.On("AbortView", mock.Anything)
 
 	vc := &bft.ViewChanger{
-		N:             4,
-		NodesList:     []uint64{0, 1, 2, 3},
-		Comm:          comm,
-		RequestsTimer: reqTimer,
-		Ticker:        make(chan time.Time),
-		Logger:        log,
-		Controller:    controller,
-		InMsqQSize:    100,
+		N:            4,
+		NodesList:    []uint64{0, 1, 2, 3},
+		Comm:         comm,
+		RequestsPool: reqPool,
+		Ticker:       make(chan time.Time),
+		Logger:       log,
+		Controller:   controller,
+		InMsqQSize:   100,
 	}
 
 	vc.Start(0)
@@ -120,7 +120,7 @@ func TestStartViewChange(t *testing.T) {
 
 	vc.Stop()
 
-	reqTimer.AssertNumberOfCalls(t, "StopTimers", 1)
+	reqPool.AssertNumberOfCalls(t, "Halt", 1)
 	controller.AssertNumberOfCalls(t, "AbortView", 1)
 }
 
@@ -157,8 +157,8 @@ func TestViewChangeProcess(t *testing.T) {
 			basicLog, err := zap.NewDevelopment()
 			assert.NoError(t, err)
 			log := basicLog.Sugar()
-			reqTimer := &mocks.RequestsTimer{}
-			reqTimer.On("StopTimers")
+			reqPool := &mocks.RequestsPool{}
+			reqPool.On("Halt")
 			controller := &mocks.ViewController{}
 			controller.On("AbortView", mock.Anything)
 			state := &mocks.State{}
@@ -171,7 +171,7 @@ func TestViewChangeProcess(t *testing.T) {
 				Comm:              comm,
 				Signer:            signer,
 				Logger:            log,
-				RequestsTimer:     reqTimer,
+				RequestsPool:      reqPool,
 				Ticker:            make(chan time.Time),
 				InFlight:          &bft.InFlightData{},
 				Checkpoint:        &types.Checkpoint{},
@@ -225,7 +225,7 @@ func TestViewChangeProcess(t *testing.T) {
 			assert.NotNil(t, m.GetViewData())
 			comm.AssertCalled(t, "SendConsensus", uint64(2), mock.Anything)
 
-			reqTimer.AssertNumberOfCalls(t, "StopTimers", 2)
+			reqPool.AssertNumberOfCalls(t, "StopTimers", 2)
 			controller.AssertNumberOfCalls(t, "AbortView", 4)
 			state.AssertNumberOfCalls(t, "Save", 2)
 
@@ -264,26 +264,23 @@ func TestViewDataProcess(t *testing.T) {
 	signer.On("Sign", mock.Anything).Return([]byte{1, 2, 3})
 	checkpoint := types.Checkpoint{}
 	checkpoint.Set(lastDecision, lastDecisionSignatures)
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("RestartTimers").Once()
 	state := &mocks.State{}
 	state.On("Save", mock.Anything).Return(nil)
 
 	vc := &bft.ViewChanger{
-		SelfID:        1,
-		N:             4,
-		NodesList:     []uint64{0, 1, 2, 3},
-		Comm:          comm,
-		Logger:        log,
-		Verifier:      verifier,
-		Controller:    controller,
-		Ticker:        make(chan time.Time),
-		Checkpoint:    &checkpoint,
-		InFlight:      &bft.InFlightData{},
-		Signer:        signer,
-		RequestsTimer: reqTimer,
-		InMsqQSize:    100,
-		State:         state,
+		SelfID:     1,
+		N:          4,
+		NodesList:  []uint64{0, 1, 2, 3},
+		Comm:       comm,
+		Logger:     log,
+		Verifier:   verifier,
+		Controller: controller,
+		Ticker:     make(chan time.Time),
+		Checkpoint: &checkpoint,
+		InFlight:   &bft.InFlightData{},
+		Signer:     signer,
+		InMsqQSize: 100,
+		State:      state,
 	}
 
 	vc.Start(1)
@@ -313,7 +310,6 @@ func TestViewDataProcess(t *testing.T) {
 	assert.Equal(t, uint64(2), num)
 
 	vc.Stop()
-	reqTimer.AssertCalled(t, "RestartTimers")
 	state.AssertCalled(t, "Save", mock.Anything)
 }
 
@@ -339,23 +335,20 @@ func TestNewViewProcess(t *testing.T) {
 	}).Return(nil).Once()
 	checkpoint := types.Checkpoint{}
 	checkpoint.Set(lastDecision, lastDecisionSignatures)
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("RestartTimers").Once()
 	state := &mocks.State{}
 	state.On("Save", mock.Anything).Return(nil)
 
 	vc := &bft.ViewChanger{
-		SelfID:        0,
-		N:             4,
-		NodesList:     []uint64{0, 1, 2, 3},
-		Logger:        log,
-		Verifier:      verifier,
-		Controller:    controller,
-		Ticker:        make(chan time.Time),
-		Checkpoint:    &checkpoint,
-		RequestsTimer: reqTimer,
-		InMsqQSize:    100,
-		State:         state,
+		SelfID:     0,
+		N:          4,
+		NodesList:  []uint64{0, 1, 2, 3},
+		Logger:     log,
+		Verifier:   verifier,
+		Controller: controller,
+		Ticker:     make(chan time.Time),
+		Checkpoint: &checkpoint,
+		InMsqQSize: 100,
+		State:      state,
 	}
 
 	vc.Start(2)
@@ -395,7 +388,6 @@ func TestNewViewProcess(t *testing.T) {
 	assert.Equal(t, uint64(2), num)
 
 	vc.Stop()
-	reqTimer.AssertCalled(t, "RestartTimers")
 	state.AssertCalled(t, "Save", mock.Anything)
 }
 
@@ -426,29 +418,28 @@ func TestNormalProcess(t *testing.T) {
 		seqNumChan <- num
 	}).Return(nil).Once()
 	controller.On("AbortView", mock.Anything)
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers")
-	reqTimer.On("RestartTimers")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt")
 	checkpoint := types.Checkpoint{}
 	checkpoint.Set(lastDecision, lastDecisionSignatures)
 	state := &mocks.State{}
 	state.On("Save", mock.Anything).Return(nil)
 
 	vc := &bft.ViewChanger{
-		SelfID:        1,
-		N:             4,
-		NodesList:     []uint64{0, 1, 2, 3},
-		Comm:          comm,
-		Logger:        log,
-		Verifier:      verifier,
-		Controller:    controller,
-		Signer:        signer,
-		RequestsTimer: reqTimer,
-		Ticker:        make(chan time.Time),
-		InFlight:      &bft.InFlightData{},
-		Checkpoint:    &checkpoint,
-		InMsqQSize:    100,
-		State:         state,
+		SelfID:       1,
+		N:            4,
+		NodesList:    []uint64{0, 1, 2, 3},
+		Comm:         comm,
+		Logger:       log,
+		Verifier:     verifier,
+		Controller:   controller,
+		Signer:       signer,
+		RequestsPool: reqPool,
+		Ticker:       make(chan time.Time),
+		InFlight:     &bft.InFlightData{},
+		Checkpoint:   &checkpoint,
+		InMsqQSize:   100,
+		State:        state,
 	}
 
 	vc.Start(0)
@@ -659,6 +650,8 @@ func TestBadViewDataMessage(t *testing.T) {
 			app.On("Deliver", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				deliverWG.Done()
 			}).Return(types.Reconfig{InLatestDecision: false})
+			reqPool := &mocks.RequestsPool{}
+			reqPool.On("RemoveRequests", mock.Anything)
 			pruner := &mocks.Pruner{}
 			pruner.On("MaybePruneRevokedRequests")
 			checkpoint := types.Checkpoint{}
@@ -670,16 +663,17 @@ func TestBadViewDataMessage(t *testing.T) {
 			}
 
 			vc := &bft.ViewChanger{
-				SelfID:      uint64(selfId),
-				N:           4,
-				NodesList:   []uint64{0, 1, 2, 3},
-				Logger:      log,
-				Verifier:    verifier,
-				Checkpoint:  &checkpoint,
-				Application: app,
-				Pruner:      pruner,
-				Ticker:      make(chan time.Time),
-				InMsqQSize:  100,
+				SelfID:       uint64(selfId),
+				N:            4,
+				NodesList:    []uint64{0, 1, 2, 3},
+				Logger:       log,
+				Verifier:     verifier,
+				Checkpoint:   &checkpoint,
+				Application:  app,
+				RequestsPool: reqPool,
+				Pruner:       pruner,
+				Ticker:       make(chan time.Time),
+				InMsqQSize:   100,
 			}
 
 			vc.Start(1)
@@ -880,6 +874,8 @@ func TestBadNewViewMessage(t *testing.T) {
 			app.On("Deliver", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				deliverWG.Done()
 			}).Return(types.Reconfig{InLatestDecision: false})
+			reqPool := &mocks.RequestsPool{}
+			reqPool.On("RemoveRequests", mock.Anything)
 			pruner := &mocks.Pruner{}
 			pruner.On("MaybePruneRevokedRequests")
 			checkpoint := types.Checkpoint{}
@@ -900,6 +896,7 @@ func TestBadNewViewMessage(t *testing.T) {
 				Verifier:     verifier,
 				Synchronizer: synchronizer,
 				Application:  app,
+				RequestsPool: reqPool,
 				Pruner:       pruner,
 				Ticker:       make(chan time.Time),
 				InMsqQSize:   100,
@@ -957,8 +954,8 @@ func TestResendViewChangeMessage(t *testing.T) {
 	comm.On("BroadcastConsensus", mock.Anything).Run(func(args mock.Arguments) {
 		msgChan <- args.Get(0).(*protos.Message)
 	})
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers").Once()
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt").Once()
 	ticker := make(chan time.Time)
 	basicLog, err := zap.NewDevelopment()
 	assert.NoError(t, err)
@@ -970,7 +967,7 @@ func TestResendViewChangeMessage(t *testing.T) {
 		N:                 4,
 		NodesList:         []uint64{0, 1, 2, 3},
 		Comm:              comm,
-		RequestsTimer:     reqTimer,
+		RequestsPool:      reqPool,
 		Ticker:            ticker,
 		Logger:            log,
 		Controller:        controller,
@@ -1002,17 +999,17 @@ func TestResendViewChangeMessage(t *testing.T) {
 	vc.Stop()
 
 	comm.AssertNumberOfCalls(t, "BroadcastConsensus", 3) // start view change and two resends
-	reqTimer.AssertNumberOfCalls(t, "StopTimers", 1)
+	reqPool.AssertNumberOfCalls(t, "Halt", 1)
 	controller.AssertNumberOfCalls(t, "AbortView", 1)
 }
 
 func TestViewChangerTimeout(t *testing.T) {
 	comm := &mocks.CommMock{}
 	comm.On("BroadcastConsensus", mock.Anything)
-	reqTimerWG := sync.WaitGroup{}
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers").Run(func(args mock.Arguments) {
-		reqTimerWG.Done()
+	reqPoolWG := sync.WaitGroup{}
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt").Run(func(args mock.Arguments) {
+		reqPoolWG.Done()
 	})
 	ticker := make(chan time.Time)
 	basicLog, err := zap.NewDevelopment()
@@ -1033,7 +1030,7 @@ func TestViewChangerTimeout(t *testing.T) {
 		N:                 4,
 		NodesList:         []uint64{0, 1, 2, 3},
 		Comm:              comm,
-		RequestsTimer:     reqTimer,
+		RequestsPool:      reqPool,
 		Ticker:            ticker,
 		Logger:            log,
 		ViewChangeTimeout: 10 * time.Second,
@@ -1047,10 +1044,10 @@ func TestViewChangerTimeout(t *testing.T) {
 	startTime := time.Now()
 
 	controllerWG.Add(1)
-	reqTimerWG.Add(1)
+	reqPoolWG.Add(1)
 	vc.StartViewChange(0, true) // start timer
 	controllerWG.Wait()
-	reqTimerWG.Wait()
+	reqPoolWG.Wait()
 
 	synchronizerWG.Add(1)
 	ticker <- startTime.Add(12 * time.Second) // timeout
@@ -1059,7 +1056,7 @@ func TestViewChangerTimeout(t *testing.T) {
 	vc.Stop()
 
 	synchronizer.AssertNumberOfCalls(t, "Sync", 1)
-	reqTimer.AssertNumberOfCalls(t, "StopTimers", 1)
+	reqPool.AssertNumberOfCalls(t, "Halt", 1)
 	controller.AssertNumberOfCalls(t, "AbortView", 1)
 	comm.AssertNumberOfCalls(t, "BroadcastConsensus", 1)
 }
@@ -1067,10 +1064,10 @@ func TestViewChangerTimeout(t *testing.T) {
 func TestBackOff(t *testing.T) {
 	comm := &mocks.CommMock{}
 	comm.On("BroadcastConsensus", mock.Anything)
-	reqTimerWG := sync.WaitGroup{}
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers").Run(func(args mock.Arguments) {
-		reqTimerWG.Done()
+	reqPoolWG := sync.WaitGroup{}
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt").Run(func(args mock.Arguments) {
+		reqPoolWG.Done()
 	})
 	ticker := make(chan time.Time)
 	basicLog, err := zap.NewDevelopment()
@@ -1093,7 +1090,7 @@ func TestBackOff(t *testing.T) {
 		N:                 4,
 		NodesList:         []uint64{0, 1, 2, 3},
 		Comm:              comm,
-		RequestsTimer:     reqTimer,
+		RequestsPool:      reqPool,
 		Ticker:            ticker,
 		Logger:            log,
 		ViewChangeTimeout: timeout,
@@ -1107,10 +1104,10 @@ func TestBackOff(t *testing.T) {
 	startTime := time.Now()
 
 	controllerWG.Add(1)
-	reqTimerWG.Add(1)
+	reqPoolWG.Add(1)
 	vc.StartViewChange(0, true) // start timer
 	controllerWG.Wait()
-	reqTimerWG.Wait()
+	reqPoolWG.Wait()
 
 	synchronizerWG.Add(1)
 	ticker <- startTime.Add(timeout + 2*time.Second) // timeout
@@ -1125,7 +1122,7 @@ func TestBackOff(t *testing.T) {
 	vc.Stop()
 
 	synchronizer.AssertNumberOfCalls(t, "Sync", 2)
-	reqTimer.AssertNumberOfCalls(t, "StopTimers", 1)
+	reqPool.AssertNumberOfCalls(t, "Halt", 1)
 	controller.AssertNumberOfCalls(t, "AbortView", 1)
 	comm.AssertNumberOfCalls(t, "BroadcastConsensus", 1)
 }
@@ -1157,9 +1154,9 @@ func TestCommitLastDecision(t *testing.T) {
 		seqNumChan <- num
 	}).Return(nil).Once()
 	controller.On("AbortView", mock.Anything)
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers")
-	reqTimer.On("RestartTimers")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt")
+	reqPool.On("RemoveRequests", mock.Anything)
 	checkpoint := types.Checkpoint{}
 	checkpoint.Set(lastDecision, lastDecisionSignatures)
 	app := &mocks.ApplicationMock{}
@@ -1170,22 +1167,22 @@ func TestCommitLastDecision(t *testing.T) {
 	pruner.On("MaybePruneRevokedRequests")
 
 	vc := &bft.ViewChanger{
-		SelfID:        1,
-		N:             4,
-		NodesList:     []uint64{0, 1, 2, 3},
-		Comm:          comm,
-		Logger:        log,
-		Verifier:      verifier,
-		Controller:    controller,
-		Signer:        signer,
-		RequestsTimer: reqTimer,
-		Ticker:        make(chan time.Time),
-		InFlight:      &bft.InFlightData{},
-		Checkpoint:    &checkpoint,
-		Application:   app,
-		InMsqQSize:    100,
-		State:         state,
-		Pruner:        pruner,
+		SelfID:       1,
+		N:            4,
+		NodesList:    []uint64{0, 1, 2, 3},
+		Comm:         comm,
+		Logger:       log,
+		Verifier:     verifier,
+		Controller:   controller,
+		Signer:       signer,
+		RequestsPool: reqPool,
+		Ticker:       make(chan time.Time),
+		InFlight:     &bft.InFlightData{},
+		Checkpoint:   &checkpoint,
+		Application:  app,
+		InMsqQSize:   100,
+		State:        state,
+		Pruner:       pruner,
 	}
 
 	vc.Start(0)
@@ -1356,8 +1353,8 @@ func TestInFlightProposalInViewData(t *testing.T) {
 			basicLog, err := zap.NewDevelopment()
 			assert.NoError(t, err)
 			log := basicLog.Sugar()
-			reqTimer := &mocks.RequestsTimer{}
-			reqTimer.On("StopTimers")
+			reqPool := &mocks.RequestsPool{}
+			reqPool.On("Halt")
 			controller := &mocks.ViewController{}
 			controller.On("AbortView", mock.Anything)
 			checkpoint := types.Checkpoint{}
@@ -1366,19 +1363,19 @@ func TestInFlightProposalInViewData(t *testing.T) {
 			state.On("Save", mock.Anything).Return(nil)
 
 			vc := &bft.ViewChanger{
-				SelfID:        0,
-				N:             4,
-				NodesList:     []uint64{0, 1, 2, 3},
-				Comm:          comm,
-				Signer:        signer,
-				Logger:        log,
-				RequestsTimer: reqTimer,
-				Ticker:        make(chan time.Time),
-				InFlight:      test.getInFlight(),
-				Checkpoint:    &checkpoint,
-				Controller:    controller,
-				InMsqQSize:    100,
-				State:         state,
+				SelfID:       0,
+				N:            4,
+				NodesList:    []uint64{0, 1, 2, 3},
+				Comm:         comm,
+				Signer:       signer,
+				Logger:       log,
+				RequestsPool: reqPool,
+				Ticker:       make(chan time.Time),
+				InFlight:     test.getInFlight(),
+				Checkpoint:   &checkpoint,
+				Controller:   controller,
+				InMsqQSize:   100,
+				State:        state,
 			}
 
 			vc.Start(0)
@@ -1400,7 +1397,7 @@ func TestInFlightProposalInViewData(t *testing.T) {
 
 			vc.Stop()
 
-			reqTimer.AssertNumberOfCalls(t, "StopTimers", 1)
+			reqPool.AssertNumberOfCalls(t, "StopTimers", 1)
 			controller.AssertNumberOfCalls(t, "AbortView", 2)
 			state.AssertNumberOfCalls(t, "Save", 1)
 		})
@@ -1569,9 +1566,8 @@ func TestInformViewChanger(t *testing.T) {
 	comm.On("BroadcastConsensus", mock.Anything).Run(func(args mock.Arguments) {
 		msgChan <- args.Get(0).(*protos.Message)
 	})
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers").Once()
-	reqTimer.On("RestartTimers")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt").Once()
 	basicLog, err := zap.NewDevelopment()
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
@@ -1579,14 +1575,15 @@ func TestInformViewChanger(t *testing.T) {
 	controller.On("AbortView", mock.Anything)
 
 	vc := &bft.ViewChanger{
-		N:             4,
-		NodesList:     []uint64{0, 1, 2, 3},
-		Comm:          comm,
-		RequestsTimer: reqTimer,
-		Ticker:        make(chan time.Time),
-		Logger:        log,
-		Controller:    controller,
-		InMsqQSize:    100,
+		N:            4,
+		NodesList:    []uint64{0, 1, 2, 3},
+		Comm:         comm,
+		RequestsPool: reqPool,
+		Checkpoint:   &types.Checkpoint{},
+		Ticker:       make(chan time.Time),
+		Logger:       log,
+		Controller:   controller,
+		InMsqQSize:   100,
 	}
 
 	vc.Start(0)
@@ -1602,9 +1599,8 @@ func TestInformViewChanger(t *testing.T) {
 
 	vc.Stop()
 
-	reqTimer.AssertNumberOfCalls(t, "StopTimers", 1)
+	reqPool.AssertNumberOfCalls(t, "Halt", 1)
 	controller.AssertNumberOfCalls(t, "AbortView", 1)
-	reqTimer.AssertCalled(t, "RestartTimers")
 }
 
 func TestRestoreViewChange(t *testing.T) {
@@ -1624,24 +1620,24 @@ func TestRestoreViewChange(t *testing.T) {
 	basicLog, err := zap.NewDevelopment()
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt")
 	controller := &mocks.ViewController{}
 	controller.On("AbortView", mock.Anything)
 
 	vc := &bft.ViewChanger{
-		SelfID:        0,
-		N:             4,
-		NodesList:     []uint64{0, 1, 2, 3},
-		Comm:          comm,
-		Signer:        signer,
-		Logger:        log,
-		RequestsTimer: reqTimer,
-		Ticker:        make(chan time.Time),
-		InFlight:      &bft.InFlightData{},
-		Checkpoint:    &types.Checkpoint{},
-		Controller:    controller,
-		InMsqQSize:    100,
+		SelfID:       0,
+		N:            4,
+		NodesList:    []uint64{0, 1, 2, 3},
+		Comm:         comm,
+		Signer:       signer,
+		Logger:       log,
+		RequestsPool: reqPool,
+		Ticker:       make(chan time.Time),
+		InFlight:     &bft.InFlightData{},
+		Checkpoint:   &types.Checkpoint{},
+		Controller:   controller,
+		InMsqQSize:   100,
 	}
 
 	restoreChan := make(chan struct{}, 1)
@@ -1931,9 +1927,9 @@ func TestCommitInFlight(t *testing.T) {
 		seqNumChan <- num
 	}).Return(nil).Once()
 	controller.On("AbortView", mock.Anything)
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers")
-	reqTimer.On("RestartTimers")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt")
+	reqPool.On("RemoveRequests", mock.Anything)
 	checkpoint := types.Checkpoint{}
 	checkpoint.Set(lastDecision, lastDecisionSignatures)
 	app := &mocks.ApplicationMock{}
@@ -1955,7 +1951,7 @@ func TestCommitInFlight(t *testing.T) {
 		Verifier:         verifier,
 		Controller:       controller,
 		Signer:           signer,
-		RequestsTimer:    reqTimer,
+		RequestsPool:     reqPool,
 		Ticker:           sched,
 		InFlight:         &bft.InFlightData{},
 		Checkpoint:       &checkpoint,
@@ -2084,9 +2080,9 @@ func TestCommitWhileHavingInFlight(t *testing.T) {
 	controller := &mocks.ViewController{}
 	controller.On("ViewChanged", mock.Anything, mock.Anything)
 	controller.On("AbortView", mock.Anything)
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers")
-	reqTimer.On("RestartTimers")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt")
+	reqPool.On("RemoveRequests", mock.Anything)
 	checkpoint := types.Checkpoint{}
 	checkpoint.Set(lastDecision, lastDecisionSignatures)
 	app := &mocks.ApplicationMock{}
@@ -2108,7 +2104,7 @@ func TestCommitWhileHavingInFlight(t *testing.T) {
 		Verifier:      verifier,
 		Controller:    controller,
 		Signer:        signer,
-		RequestsTimer: reqTimer,
+		RequestsPool:  reqPool,
 		Ticker:        sched,
 		InFlight:      &bft.InFlightData{},
 		Checkpoint:    &checkpoint,
@@ -2175,24 +2171,21 @@ func TestDontCommitInFlight(t *testing.T) {
 		num = args.Get(1).(uint64)
 		seqNumChan <- num
 	}).Return(nil).Once()
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("RestartTimers")
 	app := &mocks.ApplicationMock{}
 	app.On("Deliver", mock.Anything, mock.Anything)
 	state := &mocks.State{}
 	state.On("Save", mock.Anything).Return(nil)
 
 	vc := &bft.ViewChanger{
-		SelfID:        3,
-		N:             4,
-		NodesList:     []uint64{0, 1, 2, 3},
-		Logger:        log,
-		Verifier:      verifier,
-		Controller:    controller,
-		Ticker:        make(chan time.Time),
-		RequestsTimer: reqTimer,
-		Application:   app,
-		State:         state,
+		SelfID:      3,
+		N:           4,
+		NodesList:   []uint64{0, 1, 2, 3},
+		Logger:      log,
+		Verifier:    verifier,
+		Controller:  controller,
+		Ticker:      make(chan time.Time),
+		Application: app,
+		State:       state,
 	}
 
 	inFlightProposal := types.Proposal{

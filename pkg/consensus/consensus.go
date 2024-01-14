@@ -15,6 +15,7 @@ import (
 	algorithm "github.com/SmartBFT-Go/consensus/internal/bft"
 	bft "github.com/SmartBFT-Go/consensus/pkg/api"
 	"github.com/SmartBFT-Go/consensus/pkg/metrics/disabled"
+	"github.com/SmartBFT-Go/consensus/pkg/request"
 	"github.com/SmartBFT-Go/consensus/pkg/types"
 	protos "github.com/SmartBFT-Go/consensus/smartbftprotos"
 	"github.com/golang/protobuf/proto"
@@ -44,10 +45,9 @@ type Consensus struct {
 	Scheduler          <-chan time.Time
 	ViewChangerTicker  <-chan time.Time
 
-	submittedChan chan struct{}
 	inFlight      *algorithm.InFlightData
 	checkpoint    *types.Checkpoint
-	Pool          *algorithm.Pool
+	Pool          *request.Pool
 	viewChanger   *algorithm.ViewChanger
 	controller    *algorithm.Controller
 	collector     *algorithm.StateCollector
@@ -104,6 +104,10 @@ func (c *Consensus) GetLeaderID() uint64 {
 	return c.controller.GetLeaderID()
 }
 
+func (c *Consensus) RequestID(req []byte) string {
+	return c.RequestInspector.RequestID(req).ID
+}
+
 func (c *Consensus) Start() error {
 	if err := c.ValidateConfiguration(c.Comm.Nodes()); err != nil {
 		return errors.Wrapf(err, "configuration is invalid")
@@ -136,17 +140,23 @@ func (c *Consensus) Start() error {
 	c.checkpoint.Set(c.LastProposal, c.LastSignatures)
 
 	c.createComponents()
-	opts := algorithm.PoolOptions{
-		QueueSize:         int64(c.Config.RequestPoolSize),
-		ForwardTimeout:    c.Config.RequestForwardTimeout,
-		ComplainTimeout:   c.Config.RequestComplainTimeout,
-		AutoRemoveTimeout: c.Config.RequestAutoRemoveTimeout,
-		RequestMaxBytes:   c.Config.RequestMaxBytes,
-		SubmitTimeout:     c.Config.RequestPoolSubmitTimeout,
-		Metrics:           c.Metrics.MetricsRequestPool,
+
+	opts := request.PoolOptions{
+		MaxSize:               c.Config.RequestPoolSize,
+		BatchMaxSize:          c.Config.RequestBatchMaxCount,
+		BatchMaxSizeBytes:     c.Config.RequestBatchMaxBytes,
+		RequestMaxBytes:       c.Config.RequestMaxBytes,
+		SubmitTimeout:         c.Config.RequestPoolSubmitTimeout,
+		BatchTimeout:          c.Config.RequestBatchMaxInterval,
+		OnFirstStrikeTimeout:  c.controller.OnRequestTimeout,
+		FirstStrikeThreshold:  c.Config.RequestForwardTimeout,
+		OnSecondStrikeTimeout: c.controller.OnLeaderFwdRequestTimeout,
+		SecondStrikeThreshold: c.Config.RequestComplainTimeout,
+		AutoRemoveTimeout:     c.Config.RequestAutoRemoveTimeout,
 	}
-	c.submittedChan = make(chan struct{}, 1)
-	c.Pool = algorithm.NewPool(c.Logger, c.RequestInspector, c.controller, opts, c.submittedChan)
+	// TODO use request pool metrics
+	c.Pool = request.NewPool(c.Logger, c, opts)
+
 	c.continueCreateComponents()
 
 	c.Logger.Debugf("Application started with view %d, seq %d, and decisions %d", c.Metadata.ViewId, c.Metadata.LatestSequence, c.Metadata.DecisionsInView)
@@ -189,7 +199,8 @@ func (c *Consensus) reconfig(reconfig types.Reconfig) {
 
 	// make sure all components are stopped
 	c.viewChanger.Stop()
-	c.controller.StopWithPoolPause()
+	c.controller.Stop()
+	c.Pool.Halt()
 	c.collector.Stop()
 
 	var exist bool
@@ -232,14 +243,7 @@ OuterLoop:
 	c.Metrics.MetricsBlacklist.Initialize(newNodes)
 
 	c.createComponents()
-	opts := algorithm.PoolOptions{
-		ForwardTimeout:    c.Config.RequestForwardTimeout,
-		ComplainTimeout:   c.Config.RequestComplainTimeout,
-		AutoRemoveTimeout: c.Config.RequestAutoRemoveTimeout,
-		RequestMaxBytes:   c.Config.RequestMaxBytes,
-		SubmitTimeout:     c.Config.RequestPoolSubmitTimeout,
-	}
-	c.Pool.ChangeOptions(c.controller, opts) // TODO handle reconfiguration of queue size in the pool
+	// TODO no need for two functions anymore
 	c.continueCreateComponents()
 
 	proposal, _ := c.checkpoint.Get()
@@ -255,7 +259,20 @@ OuterLoop:
 
 	c.startComponents(view, seq, dec, false)
 
-	c.Pool.RestartTimers()
+	opts := request.PoolOptions{
+		MaxSize:               c.Config.RequestPoolSize,
+		BatchMaxSize:          c.Config.RequestBatchMaxCount,
+		BatchMaxSizeBytes:     c.Config.RequestBatchMaxBytes,
+		RequestMaxBytes:       c.Config.RequestMaxBytes,
+		SubmitTimeout:         c.Config.RequestPoolSubmitTimeout,
+		BatchTimeout:          c.Config.RequestBatchMaxInterval,
+		OnFirstStrikeTimeout:  c.controller.OnRequestTimeout,
+		FirstStrikeThreshold:  c.Config.RequestForwardTimeout,
+		OnSecondStrikeTimeout: c.controller.OnLeaderFwdRequestTimeout,
+		SecondStrikeThreshold: c.Config.RequestComplainTimeout,
+		AutoRemoveTimeout:     c.Config.RequestAutoRemoveTimeout,
+	}
+	c.Pool.Reset(opts, c.GetLeaderID() == c.Config.SelfID)
 
 	c.Metrics.MetricsConsensus.CountConsensusReconfig.Add(1)
 
@@ -279,6 +296,7 @@ func (c *Consensus) Stop() {
 	c.consensusLock.RLock()
 	c.viewChanger.Stop()
 	c.controller.Stop()
+	c.Pool.Close()
 	c.collector.Stop()
 	c.consensusLock.RUnlock()
 	c.close()
@@ -442,15 +460,13 @@ func (c *Consensus) createComponents() {
 }
 
 func (c *Consensus) continueCreateComponents() {
-	batchBuilder := algorithm.NewBatchBuilder(c.Pool, c.submittedChan, c.Config.RequestBatchMaxCount, c.Config.RequestBatchMaxBytes, c.Config.RequestBatchMaxInterval)
 	leaderMonitor := algorithm.NewHeartbeatMonitor(c.Scheduler, c.Logger, c.Config.LeaderHeartbeatTimeout, c.Config.LeaderHeartbeatCount, c.controller, c.numberOfNodes, c.controller, c.controller.ViewSequences, c.Config.NumOfTicksBehindBeforeSyncing)
-	c.controller.RequestPool = c.Pool
-	c.controller.Batcher = batchBuilder
+	c.controller.RequestsPool = c.Pool
 	c.controller.LeaderMonitor = leaderMonitor
 
 	c.viewChanger.Controller = c.controller
 	c.viewChanger.Pruner = c.controller
-	c.viewChanger.RequestsTimer = c.Pool
+	c.viewChanger.RequestsPool = c.Pool
 	c.viewChanger.ViewSequences = c.controller.ViewSequences
 }
 

@@ -57,8 +57,8 @@ func (ps *PendingStore) Start() {
 func (ps *PendingStore) Restart() {
 	ps.Stop()
 	now := ps.now()
-	ps.bucketsLock.RLock()
-	defer ps.bucketsLock.RUnlock()
+	ps.bucketsLock.Lock()
+	defer ps.bucketsLock.Unlock()
 	for _, bucket := range ps.buckets {
 		bucket.changeLastTimestamp(now)
 	}
@@ -104,7 +104,7 @@ func (ps *PendingStore) changeEpochs() {
 			ps.garbageCollectProcessed(now)
 		}
 
-		if atomic.LoadUint32(&ps.stopped) == 1 {
+		if ps.isStopped() {
 			continue
 		}
 
@@ -136,7 +136,6 @@ func (ps *PendingStore) garbageCollectEmptyBuckets() {
 	for _, bucket := range ps.buckets {
 		if bucket.getSize() > 0 {
 			newBuckets = append(newBuckets, bucket)
-			ps.Logger.Debugf("Bucket %d has %d items, sealed at %v", bucket.id)
 		} else {
 			ps.Logger.Debugf("Garbage collected bucket %d", bucket.id)
 		}
@@ -238,6 +237,10 @@ func (ps *PendingStore) removeRequestsByWorker(workerID int, requestIDs []string
 	var ensureSingleDelete sync.Map
 
 	for i, reqID := range requestIDs {
+		if ps.isClosed() {
+			return
+		}
+
 		if i%workerNum != workerID {
 			continue
 		}
@@ -271,6 +274,10 @@ func (ps *PendingStore) removeRequest(reqID string, now time.Time) {
 	// otherwise we will have a zombie request that will never be deleted.
 
 	for insertPending {
+		if ps.isClosed() {
+			return
+		}
+
 		b, exists := ps.reqID2Bucket.Load(reqID)
 		if !exists {
 			continue
@@ -348,6 +355,7 @@ type bucket struct {
 	lock                 sync.RWMutex
 	lastTimestamp        time.Time
 	firstStrikeTimestamp time.Time
+	zeroTime             time.Time
 	requests             sync.Map
 }
 
@@ -373,6 +381,7 @@ func (b *bucket) changeLastTimestamp(t time.Time) {
 	defer b.lock.Unlock()
 
 	b.lastTimestamp = t
+	b.firstStrikeTimestamp = b.zeroTime
 }
 
 func (b *bucket) TryInsert(reqID string, request []byte) bool {

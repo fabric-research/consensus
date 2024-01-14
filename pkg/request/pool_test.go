@@ -60,8 +60,8 @@ func TestRequestPool(t *testing.T) {
 		},
 	})
 
-	primaryPool.Start(true)
-	secondaryPool.Start(false)
+	primaryPool.Restart(true)
+	secondaryPool.Restart(false)
 
 	var submittedCount uint32
 	var committedReqCount int
@@ -148,7 +148,7 @@ func TestRestartPool(t *testing.T) {
 		SubmitTimeout:         time.Second * 10,
 	})
 
-	pool.Start(true)
+	pool.Restart(true)
 
 	count := 100
 
@@ -214,11 +214,11 @@ func TestBasicBatching(t *testing.T) {
 		BatchTimeout:          time.Second,
 	})
 
-	pool.Start(true)
+	pool.Restart(true)
 	assert.NoError(t, pool.Submit(byteReq1))
 	assert.Len(t, pool.NextRequests(), 1)
 
-	assert.NoError(t, pool.RemoveRequests("1"))
+	pool.RemoveRequests("1")
 	assert.Len(t, pool.NextRequests(), 0) // after timeout
 
 	assert.NoError(t, pool.Submit(byteReq2))
@@ -247,7 +247,7 @@ func TestBasicBatching(t *testing.T) {
 		BatchTimeout:          time.Second,
 	})
 
-	pool.Start(true)
+	pool.Restart(true)
 
 	assert.NoError(t, pool.Submit(byteReq4))
 	assert.NoError(t, pool.Submit(byteReq5))
@@ -270,7 +270,7 @@ func TestBasicBatching(t *testing.T) {
 		BatchTimeout:          time.Second,
 	})
 
-	pool.Start(true)
+	pool.Restart(true)
 
 	assert.NoError(t, pool.Submit(byteReq3))
 	assert.NoError(t, pool.Submit(byteReq4))
@@ -296,7 +296,7 @@ func TestBasicBatchingWhileSubmitting(t *testing.T) {
 		BatchTimeout:          time.Second,
 	})
 
-	pool.Start(true)
+	pool.Restart(true)
 
 	go func() {
 		for i := 0; i < 300; i++ {
@@ -311,24 +311,21 @@ func TestBasicBatchingWhileSubmitting(t *testing.T) {
 	assert.Len(t, res, 100)
 	for i := 0; i < 100; i++ {
 		iStr := fmt.Sprintf("%d", i)
-		err := pool.RemoveRequests(iStr)
-		assert.NoError(t, err)
+		pool.RemoveRequests(iStr)
 	}
 
 	res = pool.NextRequests()
 	assert.Len(t, res, 100)
 	for i := 0; i < 100; i++ {
 		iStr := fmt.Sprintf("%d", i)
-		err := pool.RemoveRequests(iStr)
-		assert.NoError(t, err)
+		pool.RemoveRequests(iStr)
 	}
 
 	res = pool.NextRequests()
 	assert.Len(t, res, 100)
 	for i := 0; i < 100; i++ {
 		iStr := fmt.Sprintf("%d", i)
-		err := pool.RemoveRequests(iStr)
-		assert.NoError(t, err)
+		pool.RemoveRequests(iStr)
 	}
 
 	pool.Close()
@@ -348,7 +345,7 @@ func TestBasicBatchingTimeout(t *testing.T) {
 		BatchTimeout:          time.Second,
 	})
 
-	pool.Start(true)
+	pool.Restart(true)
 
 	byteReq := makeTestRequest("1", "foo")
 	assert.NoError(t, pool.Submit(byteReq))
@@ -376,7 +373,7 @@ func TestBasicPrune(t *testing.T) {
 		BatchTimeout:          time.Second,
 	})
 
-	pool.Start(true)
+	pool.Restart(true)
 
 	for i := 0; i < 10; i++ {
 		iStr := fmt.Sprintf("%d", i)

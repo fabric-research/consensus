@@ -54,6 +54,19 @@ type RequestPool interface {
 	Close()
 }
 
+// RequestsPool is a pool of client's requests
+//
+//go:generate mockery --dir . --name RequestsPool --case underscore --output ./mocks/
+type RequestsPool interface {
+	Submit(request []byte) error
+	NextRequests() [][]byte
+	RemoveRequests(requestsIDs ...string)
+	Prune(predicate func([]byte) error)
+	Close()
+	Halt()
+	Restart(batching bool)
+}
+
 // LeaderMonitor monitors the heartbeat from the current leader
 //
 //go:generate mockery --dir . --name LeaderMonitor --case underscore --output ./mocks/
@@ -93,8 +106,7 @@ type Controller struct {
 	NodesList          []uint64
 	LeaderRotation     bool
 	DecisionsPerLeader uint64
-	RequestPool        RequestPool
-	Batcher            Batcher
+	RequestsPool       RequestsPool
 	LeaderMonitor      LeaderMonitor
 	Verifier           api.Verifier
 	Logger             api.Logger
@@ -251,7 +263,7 @@ func (c *Controller) SubmitRequest(request []byte) error {
 }
 
 func (c *Controller) addRequest(info types.RequestInfo, request []byte) error {
-	err := c.RequestPool.Submit(request)
+	err := c.RequestsPool.Submit(request)
 	if err != nil {
 		c.Logger.Infof("Request %s was not submitted, error: %s", info, err)
 		return err
@@ -264,7 +276,8 @@ func (c *Controller) addRequest(info types.RequestInfo, request []byte) error {
 
 // OnRequestTimeout is called when request-timeout expires and forwards the request to leader.
 // Called by the request-pool timeout goroutine. Upon return, the leader-forward timeout is started.
-func (c *Controller) OnRequestTimeout(request []byte, info types.RequestInfo) {
+func (c *Controller) OnRequestTimeout(request []byte) {
+	info := c.RequestInspector.RequestID(request)
 	iAm, leaderID := c.iAmTheLeader()
 	if iAm {
 		c.Logger.Infof("Request %s timeout expired, this node is the leader, nothing to do", info)
@@ -277,22 +290,16 @@ func (c *Controller) OnRequestTimeout(request []byte, info types.RequestInfo) {
 
 // OnLeaderFwdRequestTimeout is called when the leader-forward timeout expires, and complains about the leader.
 // Called by the request-pool timeout goroutine. Upon return, the auto-remove timeout is started.
-func (c *Controller) OnLeaderFwdRequestTimeout(request []byte, info types.RequestInfo) {
+func (c *Controller) OnLeaderFwdRequestTimeout() {
 	iAm, leaderID := c.iAmTheLeader()
 	if iAm {
-		c.Logger.Infof("Request %s leader-forwarding timeout expired, this node is the leader, stop send heartbeat message", info)
-		c.LeaderMonitor.StopLeaderSendMsg()
+		c.Logger.Infof("Request leader-forwarding timeout expired, this node is the leader, stop send heartbeat message")
+		c.LeaderMonitor.StopLeaderSendMsg() // TODO this doesn't happen now because the leader doesn't keep time
 		return
 	}
 
-	c.Logger.Warnf("Request %s leader-forwarding timeout expired, complaining about leader: %d", info, leaderID)
+	c.Logger.Warnf("Request leader-forwarding timeout expired, complaining about leader: %d", leaderID)
 	c.FailureDetector.Complain(c.getCurrentViewNumber(), true)
-}
-
-// OnAutoRemoveTimeout is called when the auto-remove timeout expires.
-// Called by the request-pool timeout goroutine.
-func (c *Controller) OnAutoRemoveTimeout(requestInfo types.RequestInfo) {
-	c.Logger.Debugf("Request %s auto-remove timeout expired, removed from the request pool", requestInfo)
 }
 
 // OnHeartbeatTimeout is called when the heartbeat timeout expires.
@@ -391,6 +398,7 @@ func (c *Controller) startView(proposalSequence uint64) {
 		role = Leader
 	}
 	c.LeaderMonitor.ChangeRole(role, c.currViewNumber, c.leaderID())
+	c.RequestsPool.Restart(leader)
 	c.Logger.Infof("Starting view with number %d, sequence %d, and decisions %d", c.currViewNumber, proposalSequence, c.currDecisionsInView)
 }
 
@@ -419,9 +427,6 @@ func (c *Controller) changeView(newViewNumber uint64, newProposalSequence uint64
 	c.Logger.Debugf("Starting view after setting decisions in view to %d", newDecisionsInView)
 	c.startView(newProposalSequence)
 
-	if iAm, _ := c.iAmTheLeader(); iAm {
-		c.Batcher.Reset()
-	}
 }
 
 func (c *Controller) abortView(view uint64) bool {
@@ -446,36 +451,26 @@ func (c *Controller) abortView(view uint64) bool {
 
 // Sync initiates a synchronization
 func (c *Controller) Sync() {
-	if iAmLeader, _ := c.iAmTheLeader(); iAmLeader {
-		c.Batcher.Close()
-	}
 	c.grabSyncToken()
 }
 
 // AbortView makes the controller abort the current view
 func (c *Controller) AbortView(view uint64) {
 	c.Logger.Debugf("AbortView, the current view num is %d", c.getCurrentViewNumber())
-
-	c.Batcher.Close()
-
 	c.abortViewChan <- view
 }
 
 // ViewChanged makes the controller abort the current view and start a new one with the given numbers
 func (c *Controller) ViewChanged(newViewNumber uint64, newProposalSequence uint64) {
 	c.Logger.Debugf("ViewChanged, the new view is %d", newViewNumber)
-	amILeader, _ := c.iAmTheLeader()
-	if amILeader {
-		c.Batcher.Close()
-	}
 	c.viewChange <- viewInfo{proposalSeq: newProposalSequence, viewNumber: newViewNumber}
 }
 
 func (c *Controller) propose() {
-	if c.stopped() || c.Batcher.Closed() {
+	if c.stopped() {
 		return
 	}
-	nextBatch := c.Batcher.NextBatch()
+	nextBatch := c.RequestsPool.NextRequests()
 	if len(nextBatch) == 0 { // no requests in this batch
 		c.acquireLeaderToken() // try again later
 		return
@@ -550,8 +545,6 @@ func (c *Controller) decide(d decision) {
 	if c.checkIfRotate(md.BlackList) {
 		c.Logger.Debugf("Restarting view to rotate the leader")
 		c.changeView(c.getCurrentViewNumber(), md.LatestSequence+1, c.getCurrentDecisionsInView())
-		c.Logger.Debugf("Restarting timers in request pool due to leader rotation")
-		c.RequestPool.RestartTimers()
 	}
 	c.MaybePruneRevokedRequests()
 	if iAm, _ := c.iAmTheLeader(); iAm {
@@ -741,7 +734,7 @@ func (c *Controller) MaybePruneRevokedRequests() {
 	c.verificationSequence.Store(newVerSqn)
 
 	c.Logger.Infof("Verification sequence changed: %d --> %d", oldVerSqn, newVerSqn)
-	c.RequestPool.Prune(func(req []byte) error {
+	c.RequestsPool.Prune(func(req []byte) error {
 		_, err := c.Verifier.VerifyRequest(req)
 		return err
 	})
@@ -831,25 +824,6 @@ func (c *Controller) close() {
 // Stop the controller
 func (c *Controller) Stop() {
 	c.close()
-	c.Batcher.Close()
-	c.RequestPool.Close()
-	c.LeaderMonitor.Close()
-
-	// Drain the leader token if we hold it.
-	select {
-	case <-c.leaderToken:
-	default:
-		// Do nothing
-	}
-
-	c.controllerDone.Wait()
-}
-
-// StopWithPoolPause the controller but only stop the requests pool timers
-func (c *Controller) StopWithPoolPause() {
-	c.close()
-	c.Batcher.Close()
-	c.RequestPool.StopTimers()
 	c.LeaderMonitor.Close()
 
 	// Drain the leader token if we hold it.
@@ -892,11 +866,11 @@ func (c *Controller) Decide(proposal types.Proposal, signatures []types.Signatur
 }
 
 func (c *Controller) removeDeliveredFromPool(d decision) {
+	ids := make([]string, 0, len(d.requests))
 	for _, reqInfo := range d.requests {
-		if err := c.RequestPool.RemoveRequest(reqInfo); err != nil {
-			c.Logger.Debugf("Request %s wasn't found in the pool : %s", reqInfo, err)
-		}
+		ids = append(ids, reqInfo.ID)
 	}
+	c.RequestsPool.RemoveRequests(ids...)
 }
 
 type viewInfo struct {
