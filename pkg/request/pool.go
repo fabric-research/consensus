@@ -352,11 +352,14 @@ func (rp *Pool) Reset(options PoolOptions, batching bool) {
 
 // Close closes the pool
 func (rp *Pool) Close() {
+	rp.lock.Lock()
+	defer rp.lock.Unlock()
 	atomic.StoreUint32(&rp.closed, 1)
-	if !rp.isBatchingEnabled() {
+	if rp.pending != nil {
 		rp.pending.Close()
 	}
-	// TODO need to remove all requests?
+	rp.pending = nil
+	rp.batchStore = nil
 }
 
 func (rp *Pool) isClosed() bool {

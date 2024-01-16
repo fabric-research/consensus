@@ -20,8 +20,6 @@ type BatchStore struct {
 	keys2Batches      sync.Map
 	lock              sync.RWMutex
 	signal            sync.Cond
-	stopChan          chan struct{} // TODO check if this is still needed
-	stopLock          sync.Mutex    // Reset and Stop may be called by different threads
 }
 
 type batch struct {
@@ -80,37 +78,10 @@ func NewBatchStore(batchMaxSize uint64, batchMaxSizeBytes uint64, onDelete func(
 		onDelete:          onDelete,
 		batchMaxSize:      batchMaxSize,
 		batchMaxSizeBytes: batchMaxSizeBytes,
-		stopChan:          make(chan struct{}),
 	}
 	bs.signal = sync.Cond{L: &bs.lock}
 
 	return bs
-}
-
-func (bs *BatchStore) StopBatching() {
-	bs.stopLock.Lock()
-	defer bs.stopLock.Unlock()
-	select {
-	case <-bs.stopChan:
-		return
-	default:
-	}
-	close(bs.stopChan)
-}
-
-func (bs *BatchStore) IsBatchingStopped() bool {
-	select {
-	case <-bs.stopChan:
-		return true
-	default:
-		return false
-	}
-}
-
-func (bs *BatchStore) ResetBatching() {
-	bs.stopLock.Lock()
-	defer bs.stopLock.Unlock()
-	bs.stopChan = make(chan struct{})
 }
 
 func (bs *BatchStore) Lookup(key string) (interface{}, bool) {
@@ -207,9 +178,6 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 
 	go func() {
 		select {
-		case <-bs.stopChan:
-			bs.signal.Signal()
-			return
 		case <-ctx.Done():
 			bs.signal.Signal()
 			return
@@ -225,10 +193,6 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 	// Else, either wait for the timeout
 	// or for a new batch to be enqueued.
 	bs.signal.Wait()
-
-	if bs.IsBatchingStopped() {
-		return nil
-	}
 
 	// Prefer a ready and full batch over a non-empty one
 	for len(bs.readyBatches) > 0 {
