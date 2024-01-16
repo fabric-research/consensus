@@ -30,30 +30,6 @@ type FailureDetector interface {
 	Complain(viewNum uint64, stopView bool)
 }
 
-// Batcher batches requests to eventually become a new proposal
-//
-//go:generate mockery --dir . --name Batcher --case underscore --output ./mocks/
-type Batcher interface {
-	NextBatch() [][]byte
-	Close()
-	Closed() bool
-	Reset()
-}
-
-// RequestPool is a pool of client's requests
-//
-//go:generate mockery --dir . --name RequestPool --case underscore --output ./mocks/
-type RequestPool interface {
-	Prune(predicate func([]byte) error)
-	Submit(request []byte) error
-	Size() int
-	NextRequests(maxCount int, maxSizeBytes uint64, check bool) (batch [][]byte, full bool)
-	RemoveRequest(request types.RequestInfo) error
-	StopTimers()
-	RestartTimers()
-	Close()
-}
-
 // RequestsPool is a pool of client's requests
 //
 //go:generate mockery --dir . --name RequestsPool --case underscore --output ./mocks/

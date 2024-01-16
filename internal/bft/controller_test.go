@@ -32,8 +32,6 @@ func TestControllerBasic(t *testing.T) {
 	log := basicLog.Sugar()
 	app := &mocks.ApplicationMock{}
 	app.On("Deliver", mock.Anything, mock.Anything)
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
 	reqPool := &mocks.RequestsPool{}
 	reqPool.On("Restart", mock.Anything)
 	leaderMon := &mocks.LeaderMonitor{}
@@ -78,19 +76,10 @@ func TestControllerLeaderBasic(t *testing.T) {
 	basicLog, err := zap.NewDevelopment()
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcherChan := make(chan struct{})
-	var once sync.Once
-	batcher.On("NextBatch").Run(func(args mock.Arguments) {
-		once.Do(func() {
-			batcherChan <- struct{}{}
-		})
-	}).Return([][]byte{})
 	reqPool := &mocks.RequestsPool{}
 	reqPool.On("Restart", mock.Anything)
 	batchChan := make(chan struct{})
+	var once sync.Once
 	reqPool.On("NextRequests").Run(func(args mock.Arguments) {
 		once.Do(func() {
 			batchChan <- struct{}{}
@@ -133,13 +122,6 @@ func TestLeaderPropose(t *testing.T) {
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
 	req := []byte{1}
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcher.On("NextBatch").Return([][]byte{req}).Once()
-	batcher.On("NextBatch").Return([][]byte{req}).Once()
-	batcher.On("PopRemainder").Return([][]byte{})
-	batcher.On("BatchRemainder", mock.Anything)
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerifyRequest", req).Return(types.RequestInfo{}, nil)
@@ -286,11 +268,6 @@ func TestViewChanged(t *testing.T) {
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
 	req := []byte{1}
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcher.On("Reset")
-	batcher.On("NextBatch").Return([][]byte{req})
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerificationSequence").Return(uint64(1))
@@ -389,8 +366,6 @@ func TestSyncPrevView(t *testing.T) {
 	app.On("Deliver", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		appWG.Done()
 	}).Return(types.Reconfig{InLatestDecision: false})
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
 	reqPool := &mocks.RequestsPool{}
 	reqPool.On("RemoveRequests", mock.Anything)
 	reqPool.On("Restart", mock.Anything)
@@ -576,14 +551,6 @@ func TestControllerLeaderRequestHandling(t *testing.T) {
 
 			log := basicLog.Sugar()
 
-			batcher := &mocks.Batcher{}
-			batcher.On("Close")
-			batcher.On("Closed").Return(false)
-			batcher.On("Reset")
-			batcher.On("NextBatch").Run(func(arguments mock.Arguments) {
-				time.Sleep(time.Hour)
-			})
-
 			reqPool := &mocks.RequestsPool{}
 			reqPool.On("Restart", mock.Anything)
 			reqPool.On("NextRequests").Run(func(arguments mock.Arguments) {
@@ -699,11 +666,6 @@ func TestSyncInform(t *testing.T) {
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
 	req := []byte{1}
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcher.On("Reset")
-	batcher.On("NextBatch").Return([][]byte{req})
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerificationSequence").Return(uint64(1))
@@ -883,12 +845,6 @@ func TestRotateFromLeaderToFollower(t *testing.T) {
 	leaderMon.On("InjectArtificialHeartbeat", uint64(3), mock.Anything)
 	leaderMon.On("Close")
 
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcher.On("NextBatch").Return([][]byte{req}).Once()
-	batcher.On("PopRemainder").Return([][]byte{})
-	batcher.On("BatchRemainder", mock.Anything)
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerifyRequest", req).Return(types.RequestInfo{}, nil)
@@ -1047,13 +1003,6 @@ func TestRotateFromFollowerToLeader(t *testing.T) {
 	leaderMon.On("InjectArtificialHeartbeat", uint64(2), mock.Anything)
 	leaderMon.On("Close")
 
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Reset")
-	batcher.On("Closed").Return(false)
-	batcher.On("NextBatch").Return([][]byte{req}).Once()
-	batcher.On("PopRemainder").Return([][]byte{})
-	batcher.On("BatchRemainder", mock.Anything)
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerifyRequest", req).Return(types.RequestInfo{}, nil)
