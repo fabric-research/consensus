@@ -141,23 +141,10 @@ func (c *Consensus) Start() error {
 
 	c.createComponents()
 
-	opts := request.PoolOptions{
-		MaxSize:               c.Config.RequestPoolSize,
-		BatchMaxSize:          c.Config.RequestBatchMaxCount,
-		BatchMaxSizeBytes:     c.Config.RequestBatchMaxBytes,
-		RequestMaxBytes:       c.Config.RequestMaxBytes,
-		SubmitTimeout:         c.Config.RequestPoolSubmitTimeout,
-		BatchTimeout:          c.Config.RequestBatchMaxInterval,
-		OnFirstStrikeTimeout:  c.controller.OnRequestTimeout,
-		FirstStrikeThreshold:  c.Config.RequestForwardTimeout,
-		OnSecondStrikeTimeout: c.controller.OnLeaderFwdRequestTimeout,
-		SecondStrikeThreshold: c.Config.RequestComplainTimeout,
-		AutoRemoveTimeout:     c.Config.RequestAutoRemoveTimeout,
-	}
 	// TODO use request pool metrics
-	c.Pool = request.NewPool(c.Logger, c, opts)
-
-	c.continueCreateComponents()
+	c.Pool = request.NewPool(c.Logger, c, c.createPoolOpts())
+	c.controller.RequestsPool = c.Pool
+	c.viewChanger.RequestsPool = c.Pool
 
 	c.Logger.Debugf("Application started with view %d, seq %d, and decisions %d", c.Metadata.ViewId, c.Metadata.LatestSequence, c.Metadata.DecisionsInView)
 	view, seq, dec := c.setViewAndSeq(c.Metadata.ViewId, c.Metadata.LatestSequence, c.Metadata.DecisionsInView)
@@ -243,8 +230,6 @@ OuterLoop:
 	c.Metrics.MetricsBlacklist.Initialize(newNodes)
 
 	c.createComponents()
-	// TODO no need for two functions anymore
-	c.continueCreateComponents()
 
 	proposal, _ := c.checkpoint.Get()
 	md := &protos.ViewMetadata{}
@@ -259,20 +244,7 @@ OuterLoop:
 
 	c.startComponents(view, seq, dec, false)
 
-	opts := request.PoolOptions{
-		MaxSize:               c.Config.RequestPoolSize,
-		BatchMaxSize:          c.Config.RequestBatchMaxCount,
-		BatchMaxSizeBytes:     c.Config.RequestBatchMaxBytes,
-		RequestMaxBytes:       c.Config.RequestMaxBytes,
-		SubmitTimeout:         c.Config.RequestPoolSubmitTimeout,
-		BatchTimeout:          c.Config.RequestBatchMaxInterval,
-		OnFirstStrikeTimeout:  c.controller.OnRequestTimeout,
-		FirstStrikeThreshold:  c.Config.RequestForwardTimeout,
-		OnSecondStrikeTimeout: c.controller.OnLeaderFwdRequestTimeout,
-		SecondStrikeThreshold: c.Config.RequestComplainTimeout,
-		AutoRemoveTimeout:     c.Config.RequestAutoRemoveTimeout,
-	}
-	c.Pool.Reset(opts, c.GetLeaderID() == c.Config.SelfID)
+	c.Pool.Reset(c.createPoolOpts(), c.GetLeaderID() == c.Config.SelfID)
 
 	c.Metrics.MetricsConsensus.CountConsensusReconfig.Add(1)
 
@@ -411,7 +383,7 @@ func (c *Consensus) createComponents() {
 		InFlight:           c.inFlight,
 		State:              c.state,
 		// Controller later
-		// RequestsTimer later
+		RequestsPool:      c.Pool,
 		Ticker:            c.ViewChangerTicker,
 		ResendTimeout:     c.Config.ViewChangeResendInterval,
 		ViewChangeTimeout: c.Config.ViewChangeTimeout,
@@ -436,6 +408,7 @@ func (c *Consensus) createComponents() {
 		NodesList:          c.nodes,
 		LeaderRotation:     c.Config.LeaderRotation,
 		DecisionsPerLeader: c.Config.DecisionsPerLeader,
+		RequestsPool:       c.Pool,
 		Verifier:           c.Verifier,
 		Logger:             c.Logger,
 		Assembler:          c.Assembler,
@@ -457,16 +430,12 @@ func (c *Consensus) createComponents() {
 	c.viewChanger.Synchronizer = c.controller
 
 	c.controller.ProposerBuilder = c.proposalMaker()
-}
 
-func (c *Consensus) continueCreateComponents() {
 	leaderMonitor := algorithm.NewHeartbeatMonitor(c.Scheduler, c.Logger, c.Config.LeaderHeartbeatTimeout, c.Config.LeaderHeartbeatCount, c.controller, c.numberOfNodes, c.controller, c.controller.ViewSequences, c.Config.NumOfTicksBehindBeforeSyncing)
-	c.controller.RequestsPool = c.Pool
 	c.controller.LeaderMonitor = leaderMonitor
 
 	c.viewChanger.Controller = c.controller
 	c.viewChanger.Pruner = c.controller
-	c.viewChanger.RequestsPool = c.Pool
 	c.viewChanger.ViewSequences = c.controller.ViewSequences
 }
 
@@ -527,5 +496,21 @@ func (c *Consensus) startComponents(view, seq, dec uint64, configSync bool) {
 		c.controller.Start(view, seq+1, dec, c.Config.SyncOnStart)
 	} else {
 		c.controller.Start(view, seq+1, dec, false)
+	}
+}
+
+func (c *Consensus) createPoolOpts() request.PoolOptions {
+	return request.PoolOptions{
+		MaxSize:               c.Config.RequestPoolSize,
+		BatchMaxSize:          c.Config.RequestBatchMaxCount,
+		BatchMaxSizeBytes:     c.Config.RequestBatchMaxBytes,
+		RequestMaxBytes:       c.Config.RequestMaxBytes,
+		SubmitTimeout:         c.Config.RequestPoolSubmitTimeout,
+		BatchTimeout:          c.Config.RequestBatchMaxInterval,
+		OnFirstStrikeTimeout:  c.controller.OnRequestTimeout,
+		FirstStrikeThreshold:  c.Config.RequestForwardTimeout,
+		OnSecondStrikeTimeout: c.controller.OnLeaderFwdRequestTimeout,
+		SecondStrikeThreshold: c.Config.RequestComplainTimeout,
+		AutoRemoveTimeout:     c.Config.RequestAutoRemoveTimeout,
 	}
 }
