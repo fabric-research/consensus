@@ -218,35 +218,33 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 		}
 	}()
 
-	for { // TODO why is there a for loop here?
-		if len(bs.readyBatches) > 0 {
-			return bs.dequeueBatch()
-		}
-
-		// Else, either wait for the timeout
-		// or for a new batch to be enqueued.
-		bs.signal.Wait()
-
-		if bs.IsBatchingStopped() {
-			return nil
-		}
-
-		// Prefer a ready and full batch over a non-empty one
-		if len(bs.readyBatches) > 0 {
-			return bs.dequeueBatch()
-		}
-
-		// But if no full batch can be found, use the non-empty one
-		returnedBatch := bs.currentBatch
-		// If no request is found, return nil
-		if atomic.LoadUint64(&returnedBatch.size) == 0 {
-			return nil
-		}
-		// Mark the current batch as empty, since we are returning its content
-		// to the caller.
-		bs.currentBatch = &batch{m: make(map[any]any, bs.batchMaxSize*2)}
-		return bs.prepareBatch(returnedBatch)
+	if len(bs.readyBatches) > 0 {
+		return bs.dequeueBatch()
 	}
+
+	// Else, either wait for the timeout
+	// or for a new batch to be enqueued.
+	bs.signal.Wait()
+
+	if bs.IsBatchingStopped() {
+		return nil
+	}
+
+	// Prefer a ready and full batch over a non-empty one
+	if len(bs.readyBatches) > 0 {
+		return bs.dequeueBatch()
+	}
+
+	// But if no full batch can be found, use the non-empty one
+	returnedBatch := bs.currentBatch
+	// If no request is found, return nil
+	if atomic.LoadUint64(&returnedBatch.size) == 0 {
+		return nil
+	}
+	// Mark the current batch as empty, since we are returning its content
+	// to the caller.
+	bs.currentBatch = &batch{m: make(map[any]any, bs.batchMaxSize*2)}
+	return bs.prepareBatch(returnedBatch)
 }
 
 func (bs *BatchStore) dequeueBatch() []interface{} {
