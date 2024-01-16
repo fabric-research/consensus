@@ -249,7 +249,7 @@ func (rp *Pool) RemoveRequests(requestsIDs ...string) {
 	return
 }
 
-func (rp *Pool) Prune(predicate func([]byte) error) { // TODO pruning after they are batched already might be an issue
+func (rp *Pool) Prune(predicate func([]byte) error) {
 	rp.lock.RLock()
 	defer rp.lock.RUnlock()
 

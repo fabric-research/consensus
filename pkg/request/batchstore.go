@@ -231,8 +231,12 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 	}
 
 	// Prefer a ready and full batch over a non-empty one
-	if len(bs.readyBatches) > 0 {
-		return bs.dequeueBatch()
+	for len(bs.readyBatches) > 0 {
+		dequeued := bs.dequeueBatch()
+		if len(dequeued) == 0 { // still might be empty if requests were pruned
+			continue
+		}
+		return dequeued
 	}
 
 	// But if no full batch can be found, use the non-empty one
