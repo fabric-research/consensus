@@ -275,30 +275,18 @@ func (c *Controller) addRequest(info types.RequestInfo, request []byte) error {
 }
 
 // OnRequestTimeout is called when request-timeout expires and forwards the request to leader.
-// Called by the request-pool timeout goroutine. Upon return, the leader-forward timeout is started.
+// Called by the requests-pool timeout goroutine. Upon return, the leader-forward timeout is started.
 func (c *Controller) OnRequestTimeout(request []byte) {
 	info := c.RequestInspector.RequestID(request)
-	iAm, leaderID := c.iAmTheLeader()
-	if iAm {
-		c.Logger.Infof("Request %s timeout expired, this node is the leader, nothing to do", info)
-		return
-	}
-
+	leaderID := c.leaderID()
 	c.Logger.Infof("Request %s timeout expired, forwarding request to leader: %d", info, leaderID)
 	c.Comm.SendTransaction(leaderID, request)
 }
 
 // OnLeaderFwdRequestTimeout is called when the leader-forward timeout expires, and complains about the leader.
-// Called by the request-pool timeout goroutine. Upon return, the auto-remove timeout is started.
+// Called by the requests-pool timeout goroutine.
 func (c *Controller) OnLeaderFwdRequestTimeout() {
-	iAm, leaderID := c.iAmTheLeader()
-	if iAm {
-		c.Logger.Infof("Request leader-forwarding timeout expired, this node is the leader, stop send heartbeat message")
-		c.LeaderMonitor.StopLeaderSendMsg() // TODO this doesn't happen now because the leader doesn't keep time
-		return
-	}
-
-	c.Logger.Warnf("Request leader-forwarding timeout expired, complaining about leader: %d", leaderID)
+	c.Logger.Warnf("Request leader-forwarding timeout expired, complaining about leader: %d", c.leaderID())
 	c.FailureDetector.Complain(c.getCurrentViewNumber(), true)
 }
 
