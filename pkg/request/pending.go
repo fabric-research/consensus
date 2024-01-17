@@ -60,7 +60,7 @@ func (ps *PendingStore) Restart() {
 	ps.bucketsLock.Lock()
 	defer ps.bucketsLock.Unlock()
 	for _, bucket := range ps.buckets {
-		bucket.changeLastTimestamp(now)
+		bucket.resetTimestamp(now)
 	}
 	atomic.StoreUint32(&ps.stopped, 0)
 }
@@ -163,7 +163,7 @@ func (ps *PendingStore) checkFirstStrike(now time.Time) {
 			continue
 		}
 
-		bucket.firstStrikeTimestamp = now
+		bucket.setFirstStrikeTimestamp(now)
 		buckets = append(buckets, bucket)
 	}
 
@@ -376,12 +376,20 @@ func (b *bucket) seal(now time.Time) *bucket {
 	return newBucket(b.reqID2Bucket, b.id+1)
 }
 
-func (b *bucket) changeLastTimestamp(t time.Time) {
+func (b *bucket) resetTimestamp(t time.Time) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	b.lastTimestamp = t
 	b.firstStrikeTimestamp = b.zeroTime
+	b.firstStrikeTimestamp = b.zeroTime
+}
+
+func (b *bucket) setFirstStrikeTimestamp(t time.Time) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	b.firstStrikeTimestamp = t
 }
 
 func (b *bucket) TryInsert(reqID string, request []byte) bool {
