@@ -600,7 +600,7 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 	// However, we always must fetch the latest state from other nodes,
 	// since the view may have advanced without this node and with no decisions.
 
-	var viewNumToReturn, seqToReturn, decisionsToReturn uint64
+	var newViewNum, newProposalSequence, newDecisionsInView uint64
 
 	latestDecision := syncResponse.Latest
 	var latestDecisionSeq, latestDecisionViewNum, latestDecisionDecisions uint64
@@ -620,23 +620,23 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 	}
 
 	controllerSequence := c.latestSeq()
-	seqToReturn = controllerSequence + 1
+	newProposalSequence = controllerSequence + 1
 
 	controllerViewNum := c.currViewNumber
-	viewNumToReturn = controllerViewNum
+	newViewNum = controllerViewNum
 
 	if latestDecisionSeq > controllerSequence {
 		c.Logger.Infof("Synchronizer returned with sequence %d while the controller is at sequence %d", latestDecisionSeq, controllerSequence)
 		c.Logger.Debugf("Node %d is setting the checkpoint after sync returned with view %d and seq %d", c.ID, latestDecisionViewNum, latestDecisionSeq)
 		c.Checkpoint.Set(latestDecision.Proposal, latestDecision.Signatures)
 		c.verificationSequence = uint64(latestDecision.Proposal.VerificationSequence)
-		seqToReturn = latestDecisionSeq + 1
-		decisionsToReturn = latestDecisionDecisions + 1
+		newProposalSequence = latestDecisionSeq + 1
+		newDecisionsInView = latestDecisionDecisions + 1
 	}
 
 	if latestDecisionViewNum > controllerViewNum {
 		c.Logger.Infof("Synchronizer returned with view number %d while the controller is at view number %d", latestDecisionViewNum, controllerViewNum)
-		viewNumToReturn = latestDecisionViewNum
+		newViewNum = latestDecisionViewNum
 	}
 
 	response := c.fetchState()
@@ -650,7 +650,7 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 		if response.View <= controllerViewNum && latestDecisionViewNum < controllerViewNum {
 			return 0, 0, 0 // no new view to report
 		}
-		if response.View > viewNumToReturn && response.Seq == latestDecisionSeq+1 {
+		if response.View > newViewNum && response.Seq == latestDecisionSeq+1 {
 			c.Logger.Infof("Node %d collected state with view %d and sequence %d", c.ID, response.View, response.Seq)
 			newViewToSave := &protos.SavedMessage{
 				Content: &protos.SavedMessage_NewView{
@@ -664,8 +664,8 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 			if err := c.State.Save(newViewToSave); err != nil {
 				c.Logger.Panicf("Failed to save message to state, error: %v", err)
 			}
-			viewNumToReturn = response.View
-			decisionsToReturn = 0
+			newViewNum = response.View
+			newDecisionsInView = 0
 		}
 	}
 
@@ -673,12 +673,12 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 		c.maybePruneInFlight(latestDecisionMetadata)
 	}
 
-	if viewNumToReturn > controllerViewNum {
-		c.Logger.Debugf("Node %d is informing the view changer of view %d after sync of view %d and seq %d", c.ID, viewNumToReturn, latestDecisionViewNum, latestDecisionSeq)
-		c.ViewChanger.InformNewView(viewNumToReturn)
+	if newViewNum > controllerViewNum {
+		c.Logger.Debugf("Node %d is informing the view changer of view %d after sync of view %d and seq %d", c.ID, newViewNum, latestDecisionViewNum, latestDecisionSeq)
+		c.ViewChanger.InformNewView(newViewNum)
 	}
 
-	return viewNumToReturn, seqToReturn, decisionsToReturn
+	return newViewNum, newProposalSequence, newDecisionsInView
 }
 
 func (c *Controller) maybePruneInFlight(syncResultViewMD *protos.ViewMetadata) {
