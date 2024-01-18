@@ -396,8 +396,8 @@ func (rp *Pool) Restart(batching bool) {
 	}
 
 	if !batchingWasEnabled && !batching {
-		// if batching was not enabled anyway just restart the pending store
-		rp.pending.Restart()
+		// if batching was not enabled anyway just reset timestamps of the pending store
+		rp.pending.ResetTimestamps()
 		return
 	}
 

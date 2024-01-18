@@ -40,29 +40,69 @@ type PendingStore struct {
 	currentBucket         atomic.Value
 	buckets               []*bucket
 	stopped               uint32
-	closed                uint32
-	bucketsLock           sync.RWMutex
+	bucketsLock           sync.Mutex
+	closedWG              sync.WaitGroup
+	closeOnce             sync.Once
+	closeChan             chan struct{}
+	resetChan             chan struct{}
+	finishResetChan       chan struct{}
 }
 
 func (ps *PendingStore) Init() {
 	ps.reqID2Bucket = new(sync.Map)
 	ps.currentBucket.Store(newBucket(ps.reqID2Bucket, 0))
 	ps.lastTick.Store(ps.StartTime)
+	ps.closeChan = make(chan struct{})
+	ps.closeOnce = sync.Once{}
+	ps.resetChan = make(chan struct{})
+	ps.finishResetChan = make(chan struct{})
 }
 
 func (ps *PendingStore) Start() {
-	go ps.changeEpochs()
+	ps.closedWG.Add(1)
+	go ps.run()
 }
 
-func (ps *PendingStore) Restart() {
+func (ps *PendingStore) run() {
+	defer ps.closedWG.Done()
+	for {
+		select {
+		case <-ps.closeChan:
+			return
+		case <-ps.resetChan:
+			ps.reset()
+		default:
+			ps.changeEpochs()
+		}
+	}
+}
+
+func (ps *PendingStore) ResetTimestamps() {
+	select {
+	case <-ps.closeChan:
+		return
+	case ps.resetChan <- struct{}{}:
+	}
+	select {
+	case <-ps.closeChan: // if closed simply return
+		return
+	case <-ps.finishResetChan: // wait for reset to finish
+	}
+}
+
+func (ps *PendingStore) reset() {
 	ps.Stop()
+	defer atomic.StoreUint32(&ps.stopped, 0)
+
 	now := ps.now()
-	ps.bucketsLock.Lock()
-	defer ps.bucketsLock.Unlock()
 	for _, bucket := range ps.buckets {
 		bucket.resetTimestamp(now)
 	}
-	atomic.StoreUint32(&ps.stopped, 0)
+
+	select {
+	case ps.finishResetChan <- struct{}{}:
+	case <-ps.closeChan:
+	}
 }
 
 func (ps *PendingStore) Stop() {
@@ -74,46 +114,54 @@ func (ps *PendingStore) isStopped() bool {
 }
 
 func (ps *PendingStore) Close() {
-	atomic.StoreUint32(&ps.closed, 1)
+	ps.closeOnce.Do(func() {
+		if ps.closeChan == nil {
+			return
+		}
+		close(ps.closeChan)
+	})
+	ps.closedWG.Wait()
 }
 
 func (ps *PendingStore) isClosed() bool {
-	return atomic.LoadUint32(&ps.closed) == 1
+	select {
+	case <-ps.closeChan:
+		return true
+	default:
+		return false
+	}
 }
 
 func (ps *PendingStore) changeEpochs() {
 	lastEpochChange := ps.StartTime
 	lastProcessedGC := ps.StartTime
-	for {
-		if ps.isClosed() {
-			return
-		}
 
-		now := <-ps.Time
-		ps.lastTick.Store(now)
-		if now.Sub(lastEpochChange) <= ps.Epoch {
-			continue
-		}
+	now := <-ps.Time
+	ps.lastTick.Store(now)
+	if now.Sub(lastEpochChange) <= ps.Epoch {
+		return
+	}
 
-		lastEpochChange = now
+	lastEpochChange = now
 
-		ps.rotateBuckets(now)
-		ps.garbageCollectEmptyBuckets()
-		if now.Sub(lastProcessedGC) > ps.ReqIDGCInterval {
-			lastProcessedGC = now
-			ps.garbageCollectProcessed(now)
-		}
+	ps.bucketsLock.Lock()
+	defer ps.bucketsLock.Unlock()
 
-		if ps.isStopped() {
-			continue
-		}
+	ps.rotateBuckets(now)
+	ps.garbageCollectEmptyBuckets()
+	if now.Sub(lastProcessedGC) > ps.ReqIDGCInterval {
+		lastProcessedGC = now
+		ps.garbageCollectProcessed(now)
+	}
 
-		ps.checkFirstStrike(now)
-		if ps.checkSecondStrike(now) {
-			ps.SecondStrikeCallback()
-			break
-		}
+	if ps.isStopped() {
+		return
+	}
 
+	ps.checkFirstStrike(now)
+	if ps.checkSecondStrike(now) {
+		ps.SecondStrikeCallback()
+		return
 	}
 }
 
@@ -132,7 +180,6 @@ func (ps *PendingStore) garbageCollectProcessed(now time.Time) {
 func (ps *PendingStore) garbageCollectEmptyBuckets() {
 	var newBuckets []*bucket
 
-	ps.bucketsLock.RLock()
 	for _, bucket := range ps.buckets {
 		if bucket.getSize() > 0 {
 			newBuckets = append(newBuckets, bucket)
@@ -140,17 +187,11 @@ func (ps *PendingStore) garbageCollectEmptyBuckets() {
 			ps.Logger.Debugf("Garbage collected bucket %d", bucket.id)
 		}
 	}
-	ps.bucketsLock.RUnlock()
 
-	ps.bucketsLock.Lock()
-	defer ps.bucketsLock.Unlock()
 	ps.buckets = newBuckets
 }
 
 func (ps *PendingStore) checkFirstStrike(now time.Time) {
-
-	ps.bucketsLock.RLock()
-	defer ps.bucketsLock.RUnlock()
 
 	var buckets []*bucket
 
@@ -179,9 +220,6 @@ func (ps *PendingStore) checkFirstStrike(now time.Time) {
 
 func (ps *PendingStore) checkSecondStrike(now time.Time) bool {
 
-	ps.bucketsLock.RLock()
-	defer ps.bucketsLock.RUnlock()
-
 	for _, bucket := range ps.buckets {
 		if bucket.firstStrikeTimestamp.IsZero() {
 			continue
@@ -207,9 +245,6 @@ func (ps *PendingStore) rotateBuckets(now time.Time) {
 	if !ps.currentBucket.CompareAndSwap(currentBucket, currentBucket.seal(now)) {
 		panic("programming error: swap should not have failed")
 	}
-
-	ps.bucketsLock.Lock()
-	defer ps.bucketsLock.Unlock()
 
 	ps.buckets = append(ps.buckets, currentBucket)
 }
@@ -329,8 +364,8 @@ func (ps *PendingStore) GetAllRequests(max uint64) [][]byte {
 
 	requests := make([][]byte, 0, max*2)
 
-	ps.bucketsLock.RLock()
-	defer ps.bucketsLock.RUnlock()
+	ps.bucketsLock.Lock()
+	defer ps.bucketsLock.Unlock()
 
 	for _, b := range ps.buckets {
 		b.requests.Range(func(_, v interface{}) bool {
