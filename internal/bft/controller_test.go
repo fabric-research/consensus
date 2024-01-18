@@ -1161,10 +1161,6 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		commSendWG.Done()
 	})
 
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers")
-	reqTimer.On("RestartTimers")
-
 	ticker := make(chan time.Time)
 
 	signer := &mocks.SignerMock{}
@@ -1173,9 +1169,6 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		ID:    4,
 		Value: []byte{4},
 	})
-
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
 
 	state := &mocks.State{}
 	state.On("Save", mock.Anything).Return(nil)
@@ -1193,8 +1186,9 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 
 	assembler := &mocks.AssemblerMock{}
 
-	reqPool := &mocks.RequestPool{}
-	reqPool.On("Close")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt")
+	reqPool.On("Restart", mock.Anything)
 
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMonWG := sync.WaitGroup{}
@@ -1268,7 +1262,7 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		Application:       app,
 		Verifier:          verifier,
 		Signer:            signer,
-		RequestsTimer:     reqTimer,
+		RequestsPool:      reqPool,
 		State:             state,
 		InFlight:          &bft.InFlightData{},
 		Ticker:            ticker,
@@ -1289,11 +1283,10 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		N:             7,
 		NodesList:     []uint64{1, 2, 3, 4, 5, 6, 7},
 		Logger:        log,
-		Batcher:       batcher,
 		Verifier:      verifier,
 		Assembler:     assembler,
 		Comm:          comm,
-		RequestPool:   reqPool,
+		RequestsPool:  reqPool,
 		LeaderMonitor: leaderMon,
 		Synchronizer:  synchronizer,
 		ViewChanger:   vc,

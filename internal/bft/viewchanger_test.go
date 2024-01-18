@@ -225,7 +225,7 @@ func TestViewChangeProcess(t *testing.T) {
 			assert.NotNil(t, m.GetViewData())
 			comm.AssertCalled(t, "SendConsensus", uint64(2), mock.Anything)
 
-			reqPool.AssertNumberOfCalls(t, "StopTimers", 2)
+			reqPool.AssertNumberOfCalls(t, "Halt", 2)
 			controller.AssertNumberOfCalls(t, "AbortView", 4)
 			state.AssertNumberOfCalls(t, "Save", 2)
 
@@ -1397,7 +1397,7 @@ func TestInFlightProposalInViewData(t *testing.T) {
 
 			vc.Stop()
 
-			reqPool.AssertNumberOfCalls(t, "StopTimers", 1)
+			reqPool.AssertNumberOfCalls(t, "Halt", 1)
 			controller.AssertNumberOfCalls(t, "AbortView", 2)
 			state.AssertNumberOfCalls(t, "Save", 1)
 		})
