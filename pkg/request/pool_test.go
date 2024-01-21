@@ -263,7 +263,7 @@ func TestBasicBatching(t *testing.T) {
 		FirstStrikeThreshold:  time.Second * 5,
 		SecondStrikeThreshold: time.Minute / 2,
 		BatchMaxSize:          3,
-		BatchMaxSizeBytes:     uint64(len(byteReq3) + len(byteReq4)),
+		BatchMaxSizeBytes:     uint32(len(byteReq3) + len(byteReq4)),
 		MaxSize:               3,
 		AutoRemoveTimeout:     time.Second * 10,
 		SubmitTimeout:         time.Second * 10,

@@ -502,8 +502,8 @@ func (c *Consensus) startComponents(view, seq, dec uint64, configSync bool) {
 func (c *Consensus) createPoolOpts() request.PoolOptions {
 	return request.PoolOptions{
 		MaxSize:               c.Config.RequestPoolSize,
-		BatchMaxSize:          c.Config.RequestBatchMaxCount,
-		BatchMaxSizeBytes:     c.Config.RequestBatchMaxBytes,
+		BatchMaxSize:          uint32(c.Config.RequestBatchMaxCount), // TODO notice we convert here to uint32
+		BatchMaxSizeBytes:     uint32(c.Config.RequestBatchMaxBytes),
 		RequestMaxBytes:       c.Config.RequestMaxBytes,
 		SubmitTimeout:         c.Config.RequestPoolSubmitTimeout,
 		BatchTimeout:          c.Config.RequestBatchMaxInterval,

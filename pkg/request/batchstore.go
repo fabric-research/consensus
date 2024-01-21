@@ -15,16 +15,19 @@ type BatchStore struct {
 	currentBatch      *batch
 	readyBatches      []*batch
 	onDelete          func(key string)
-	batchMaxSize      uint64
-	batchMaxSizeBytes uint64
+	batchMaxSize      uint32
+	batchMaxSizeBytes uint32
 	keys2Batches      sync.Map
 	lock              sync.RWMutex
 	signal            sync.Cond
 }
 
+const sizeBytesOffset = 32
+
 type batch struct {
-	lock      sync.RWMutex
-	size      uint64
+	lock sync.RWMutex
+	// use one uint64 var to represent both the size and the size in bytes of a batch
+	// and increment both using one atomic operation.
 	sizeBytes uint64
 	enqueued  bool
 	m         map[any]any
@@ -72,7 +75,7 @@ func (b *batch) Delete(key any) {
 	delete(b.m, key)
 }
 
-func NewBatchStore(batchMaxSize uint64, batchMaxSizeBytes uint64, onDelete func(string)) *BatchStore {
+func NewBatchStore(batchMaxSize uint32, batchMaxSizeBytes uint32, onDelete func(string)) *BatchStore {
 	bs := &BatchStore{
 		currentBatch:      &batch{m: make(map[any]any, batchMaxSize*2)},
 		onDelete:          onDelete,
@@ -95,13 +98,14 @@ func (bs *BatchStore) Lookup(key string) (interface{}, bool) {
 	return batch.Load(key)
 }
 
-func (bs *BatchStore) Insert(key string, value interface{}, size uint64) bool {
+func (bs *BatchStore) Insert(key string, value interface{}, size uint32) bool {
 	for {
 		// Try to add to the current batch. It doesn't matter if we don't end up using it,
 		// we only care about if it's higher than the limit or not.
 		bs.lock.RLock()
-		full := atomic.AddUint64(&bs.currentBatch.size, 1) > bs.batchMaxSize
-		fullBytes := atomic.AddUint64(&bs.currentBatch.sizeBytes, size) > bs.batchMaxSizeBytes
+		newSize := atomic.AddUint64(&bs.currentBatch.sizeBytes, uint64(size)+(1<<sizeBytesOffset))
+		full := uint32(newSize>>sizeBytesOffset) > bs.batchMaxSize
+		fullBytes := uint32(newSize) > bs.batchMaxSizeBytes
 		currBatch := bs.currentBatch
 
 		if !full && !fullBytes {
@@ -206,7 +210,7 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 	// But if no full batch can be found, use the non-empty one
 	returnedBatch := bs.currentBatch
 	// If no request is found, return nil
-	if atomic.LoadUint64(&returnedBatch.size) == 0 {
+	if atomic.LoadUint64(&returnedBatch.sizeBytes) == 0 {
 		return nil
 	}
 	// Mark the current batch as empty, since we are returning its content

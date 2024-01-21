@@ -67,8 +67,8 @@ type requestItem struct {
 // PoolOptions is the pool configuration
 type PoolOptions struct {
 	MaxSize               uint64
-	BatchMaxSize          uint64
-	BatchMaxSizeBytes     uint64
+	BatchMaxSize          uint32
+	BatchMaxSizeBytes     uint32
 	RequestMaxBytes       uint64
 	SubmitTimeout         time.Duration
 	BatchTimeout          time.Duration
@@ -192,7 +192,7 @@ func (rp *Pool) submitToBatchStore(reqID string, request []byte) error {
 		request: reqCopy,
 	}
 
-	inserted := rp.batchStore.Insert(reqID, reqItem, uint64(len(request)))
+	inserted := rp.batchStore.Insert(reqID, reqItem, uint32(len(request)))
 	if !inserted {
 		rp.semaphore.Release(1)
 		rp.logger.Debugf("request %s has been already added to the pool", reqID)
