@@ -116,9 +116,6 @@ func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool 
 }
 
 func (rp *Pool) start() {
-	rp.lock.Lock()
-	defer rp.lock.Unlock()
-
 	rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
 		rp.semaphore.Release(1)
 	})
