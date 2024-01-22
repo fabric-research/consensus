@@ -375,7 +375,7 @@ func TestBasicPrune(t *testing.T) {
 
 	pool.Restart(true)
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		iStr := fmt.Sprintf("%d", i)
 		byteReq := makeTestRequest(iStr, "foo")
 		err := pool.Submit(byteReq)
@@ -384,18 +384,18 @@ func TestBasicPrune(t *testing.T) {
 
 	pool.Prune(func(req []byte) error {
 		ID := insp.RequestID(req)
-		if ID == "5" {
+		if ID == "3" {
 			return errors.New("remove")
 		}
 		return nil
 	})
 
 	res := pool.NextRequests()
-	assert.Len(t, res, 9)
+	assert.Len(t, res, 4)
 
 	pool.Restart(false)
 
-	for i := 0; i < 10; i++ {
+	for i := 5; i < 10; i++ {
 		iStr := fmt.Sprintf("%d", i)
 		byteReq := makeTestRequest(iStr, "foo")
 		err := pool.Submit(byteReq)
@@ -404,7 +404,7 @@ func TestBasicPrune(t *testing.T) {
 
 	pool.Prune(func(req []byte) error {
 		ID := insp.RequestID(req)
-		if ID == "3" || ID == "4" {
+		if ID == "1" || ID == "2" || ID == "7" || ID == "8" || ID == "9" {
 			return errors.New("remove")
 		}
 		return nil
@@ -413,7 +413,7 @@ func TestBasicPrune(t *testing.T) {
 	pool.Restart(true)
 
 	res = pool.NextRequests()
-	assert.Len(t, res, 8)
+	assert.Len(t, res, 4)
 
 }
 

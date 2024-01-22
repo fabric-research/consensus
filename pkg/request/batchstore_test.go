@@ -40,6 +40,7 @@ func TestBatchStore(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workerNum)
+	var inserted uint32
 
 	for worker := 0; worker < workerNum; worker++ {
 		go func(worker int) {
@@ -50,7 +51,9 @@ func TestBatchStore(t *testing.T) {
 				binary.BigEndian.PutUint32(key, uint32(worker))
 				binary.BigEndian.PutUint32(key[4:], uint32(i))
 				keyID := requestInspector.RequestID(key)
-				bs.Insert(keyID, key, uint32(len(key)))
+				if bs.Insert(keyID, key, uint32(len(key))) {
+					atomic.AddUint32(&inserted, 1)
+				}
 				loaded <- keyID
 			}
 		}(worker)
@@ -58,6 +61,8 @@ func TestBatchStore(t *testing.T) {
 
 	wg.Wait()
 	close(loaded)
+
+	assert.Equal(t, workerNum*workPerWorker, int(inserted))
 
 	for i := 0; i < 10; i++ {
 		ctx, _ = context.WithTimeout(context.Background(), time.Second)

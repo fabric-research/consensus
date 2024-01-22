@@ -6,7 +6,6 @@
 package request
 
 import (
-	"context"
 	"encoding/binary"
 	"runtime"
 	"sync"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/sync/semaphore"
 )
 
 func TestPending(t *testing.T) {
@@ -40,7 +38,7 @@ func TestPending(t *testing.T) {
 		Epoch:                 time.Millisecond * 200,
 		FirstStrikeThreshold:  time.Second * 10,
 		Inspector:             requestInspector,
-		Semaphore:             semaphore.NewWeighted(10000),
+		OnDelete:              func(key string) {},
 		SecondStrikeThreshold: time.Second,
 	}
 
@@ -71,9 +69,7 @@ func TestPending(t *testing.T) {
 				reqIDsSent <- reqID
 
 				atomic.AddUint32(&submittedCount, 1)
-				if err := ps.Submit(req, context.Background()); err != nil {
-					panic(err)
-				}
+				ps.Submit(req)
 			}
 		}(worker)
 	}
@@ -123,7 +119,7 @@ func TestGetAll(t *testing.T) {
 		Epoch:                 time.Millisecond * 200,
 		FirstStrikeThreshold:  time.Second * 10,
 		Inspector:             requestInspector,
-		Semaphore:             semaphore.NewWeighted(10000),
+		OnDelete:              func(key string) {},
 		SecondStrikeThreshold: time.Second,
 	}
 
@@ -135,7 +131,7 @@ func TestGetAll(t *testing.T) {
 	for i := 0; i < count; i++ {
 		req := make([]byte, 8)
 		binary.BigEndian.PutUint64(req, uint64(i))
-		if err := ps.Submit(req, context.Background()); err != nil {
+		if err := ps.Submit(req); err != nil {
 			panic(err)
 		}
 	}

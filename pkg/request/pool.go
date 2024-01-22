@@ -109,34 +109,35 @@ func NewPool(log Logger, inspector RequestInspector, options PoolOptions) *Pool 
 }
 
 func (rp *Pool) start() {
-	rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
-		rp.semaphore.Release(1)
-	})
-
-	rp.pending = createPendingStore(rp.logger, rp.inspector, rp.options)
-	if rp.options.OnFirstStrikeTimeout != nil {
-		rp.pending.FirstStrikeCallback = rp.options.OnFirstStrikeTimeout
-	}
-
+	rp.batchStore = rp.createBatchStore()
+	rp.pending = rp.createPendingStore()
 	rp.pending.Init()
 	rp.pending.Start()
 }
 
-func createPendingStore(log Logger, inspector RequestInspector, options PoolOptions) *PendingStore {
+func (rp *Pool) createPendingStore() *PendingStore {
 	return &PendingStore{
-		Inspector:             inspector,
-		ReqIDGCInterval:       options.AutoRemoveTimeout / 4,
-		ReqIDLifetime:         options.AutoRemoveTimeout,
+		Inspector:             rp.inspector,
+		ReqIDGCInterval:       rp.options.AutoRemoveTimeout / 4,
+		ReqIDLifetime:         rp.options.AutoRemoveTimeout,
 		Time:                  time.NewTicker(time.Second).C,
 		StartTime:             time.Now(),
-		Logger:                log,
-		SecondStrikeThreshold: options.SecondStrikeThreshold,
-		FirstStrikeThreshold:  options.FirstStrikeThreshold,
-		Semaphore:             semaphore.NewWeighted(int64(options.MaxSize)),
-		Epoch:                 time.Second,
-		FirstStrikeCallback:   options.OnFirstStrikeTimeout,
-		SecondStrikeCallback:  options.OnSecondStrikeTimeout,
+		Logger:                rp.logger,
+		SecondStrikeThreshold: rp.options.SecondStrikeThreshold,
+		FirstStrikeThreshold:  rp.options.FirstStrikeThreshold,
+		OnDelete: func(key string) {
+			rp.semaphore.Release(1)
+		},
+		Epoch:                time.Second,
+		FirstStrikeCallback:  rp.options.OnFirstStrikeTimeout,
+		SecondStrikeCallback: rp.options.OnSecondStrikeTimeout,
 	}
+}
+
+func (rp *Pool) createBatchStore() *BatchStore {
+	return NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
+		rp.semaphore.Release(1)
+	})
 }
 
 // Submit a request into the pool, returns an error when request is already in the pool
@@ -158,25 +159,35 @@ func (rp *Pool) Submit(request []byte) error {
 
 	reqID := rp.inspector.RequestID(request)
 
-	if !rp.isBatchingEnabled() {
-		ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
+	defer cancel()
 
-		rp.logger.Debugf("Submitted request %s to pending store", reqID)
-		return rp.pending.Submit(request, ctx)
+	if err := rp.semaphore.Acquire(ctx, 1); err != nil {
+		rp.logger.Warnf("timed out enqueuing request %s to pool", reqID)
+		return fmt.Errorf("timed out enqueuing request %s to pool", reqID)
+	}
+
+	if !rp.isBatchingEnabled() {
+		return rp.submitToPendingStore(reqID, request)
 	}
 
 	return rp.submitToBatchStore(reqID, request)
 }
 
-func (rp *Pool) submitToBatchStore(reqID string, request []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
-	defer cancel()
-
-	if err := rp.semaphore.Acquire(ctx, 1); err != nil {
-		rp.logger.Warnf("Timed out enqueuing request %s to pool", reqID)
-		return fmt.Errorf("timed out")
+func (rp *Pool) submitToPendingStore(reqID string, request []byte) error {
+	rp.logger.Debugf("submitting request %s to pending store", reqID)
+	err := rp.pending.Submit(request)
+	if err != nil {
+		rp.semaphore.Release(1)
+		rp.logger.Debugf("request %s has been already added to the pool", reqID)
+		return err
 	}
+	rp.logger.Debugf("submitted request %s to pending store", reqID)
+	return nil
+}
+
+func (rp *Pool) submitToBatchStore(reqID string, request []byte) error {
+	rp.logger.Debugf("submitting request %s to batch store", reqID)
 
 	reqCopy := make([]byte, len(request))
 	copy(reqCopy, request)
@@ -192,8 +203,7 @@ func (rp *Pool) submitToBatchStore(reqID string, request []byte) error {
 		return nil
 	}
 
-	rp.logger.Debugf("Submitted request %s to batch store", reqID)
-
+	rp.logger.Debugf("submitted request %s to batch store", reqID)
 	return nil
 }
 
@@ -262,8 +272,12 @@ func (rp *Pool) Prune(predicate func([]byte) error) {
 	rp.RemoveRequests(requestsToRemove...)
 }
 
-// Reset resets the pool
+// Reset resets the pool, with new pool options
 func (rp *Pool) Reset(options PoolOptions, batching bool) {
+
+	// TODO finish and test
+	// TODO what should happen when sizes change?
+
 	rp.lock.Lock()
 	defer rp.lock.Unlock()
 
@@ -309,13 +323,11 @@ func (rp *Pool) Reset(options PoolOptions, batching bool) {
 	}
 
 	rp.options = options
-	rp.semaphore = semaphore.NewWeighted(int64(options.MaxSize))
+	//rp.semaphore = semaphore.NewWeighted(int64(options.MaxSize)) // TODO change size
 
 	rp.setBatching(batching)
 	if batching {
-		rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
-			rp.semaphore.Release(1)
-		})
+		rp.batchStore = rp.createBatchStore()
 		for _, req := range requests {
 			reqInfo := rp.inspector.RequestID(req)
 			if err := rp.submitToBatchStore(reqInfo, req); err != nil {
@@ -324,16 +336,14 @@ func (rp *Pool) Reset(options PoolOptions, batching bool) {
 			}
 		}
 	} else {
-		rp.pending = createPendingStore(rp.logger, rp.inspector, rp.options)
+		rp.pending = rp.createPendingStore()
 		rp.pending.Init()
 		for _, req := range requests {
-			ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
-			if err := rp.pending.Submit(req, ctx); err != nil {
-				rp.logger.Errorf("Could not submit request into pending store; error: %s", err)
-				cancel()
+			reqInfo := rp.inspector.RequestID(req)
+			if err := rp.submitToPendingStore(reqInfo, req); err != nil {
+				rp.logger.Errorf("Could not submit request to pending store; error: %s", err)
 				return
 			}
-			cancel()
 		}
 		rp.pending.Start()
 	}
@@ -421,28 +431,23 @@ func (rp *Pool) moveToPendingStore() {
 	rp.batchStore.ForEach(func(_, v interface{}) {
 		requests = append(requests, v.(*requestItem).request)
 	})
-	rp.pending = createPendingStore(rp.logger, rp.inspector, rp.options)
+	rp.pending = rp.createPendingStore()
 	rp.pending.Init()
 	for _, req := range requests {
-		ctx, cancel := context.WithTimeout(context.Background(), rp.options.SubmitTimeout)
-		if err := rp.pending.Submit(req, ctx); err != nil {
-			rp.logger.Errorf("Could not submit request into pending store; error: %s", err)
-			cancel()
+		reqInfo := rp.inspector.RequestID(req)
+		if err := rp.submitToPendingStore(reqInfo, req); err != nil {
+			rp.logger.Errorf("Could not submit request to pending store; error: %s", err)
 			return
 		}
-		cancel()
 	}
 	rp.pending.Start()
 	rp.batchStore = nil
-	rp.semaphore = semaphore.NewWeighted(int64(rp.options.MaxSize))
 }
 
 func (rp *Pool) moveToBatchStore() {
 	rp.pending.Close()
 	requests := rp.pending.GetAllRequests(rp.options.MaxSize)
-	rp.batchStore = NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
-		rp.semaphore.Release(1)
-	})
+	rp.batchStore = rp.createBatchStore()
 	for _, req := range requests {
 		reqInfo := rp.inspector.RequestID(req)
 		if err := rp.submitToBatchStore(reqInfo, req); err != nil {

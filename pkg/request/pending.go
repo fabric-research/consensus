@@ -33,7 +33,7 @@ type PendingStore struct {
 	Time                  <-chan time.Time
 	StartTime             time.Time
 	Epoch                 time.Duration
-	Semaphore             Semaphore
+	OnDelete              func(key string)
 	lastTick              atomic.Value
 	reqID2Bucket          *sync.Map
 	processed             sync.Map
@@ -322,25 +322,20 @@ func (ps *PendingStore) removeRequest(reqID string, now time.Time) {
 		insertPending = !deletionSucceeded
 	}
 
-	ps.Semaphore.Release(1)
+	ps.OnDelete(reqID)
 }
 
-func (ps *PendingStore) Submit(request []byte, ctx context.Context) error {
+func (ps *PendingStore) Submit(request []byte) error {
 
 	if ps.isClosed() {
 		return errors.Errorf("pending store closed, request rejected")
-	}
-
-	if err := ps.Semaphore.Acquire(ctx, 1); err != nil {
-		return err
 	}
 
 	reqID := ps.Inspector.RequestID(request)
 
 	if _, loaded := ps.processed.LoadOrStore(reqID, ps.now()); loaded {
 		ps.Logger.Debugf("request %s already processed", reqID)
-		ps.Semaphore.Release(1)
-		return nil
+		return errors.Errorf("request %s already processed", reqID)
 	}
 
 	// Insertion may fail if we have a concurrent sealing of the bucket.

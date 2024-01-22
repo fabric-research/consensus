@@ -14,6 +14,7 @@ import (
 type BatchStore struct {
 	currentBatch      *batch
 	readyBatches      []*batch
+	fetchedBatches    []*batch
 	onDelete          func(key string)
 	batchMaxSize      uint32
 	batchMaxSizeBytes uint32
@@ -145,6 +146,13 @@ func (bs *BatchStore) ForEach(f func(k, v interface{})) {
 	bs.lock.RLock()
 	defer bs.lock.RUnlock()
 
+	for _, batch := range bs.fetchedBatches {
+		batch.Range(func(k, v interface{}) bool {
+			f(k, v)
+			return true
+		})
+	}
+
 	for _, batch := range bs.readyBatches {
 		batch.Range(func(k, v interface{}) bool {
 			f(k, v)
@@ -216,11 +224,13 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 	// Mark the current batch as empty, since we are returning its content
 	// to the caller.
 	bs.currentBatch = &batch{m: make(map[any]any, bs.batchMaxSize*2)}
+	bs.fetchedBatches = append(bs.fetchedBatches, returnedBatch)
 	return bs.prepareBatch(returnedBatch)
 }
 
 func (bs *BatchStore) dequeueBatch() []interface{} {
 	result := bs.prepareBatch(bs.readyBatches[0])
+	bs.fetchedBatches = append(bs.fetchedBatches, bs.readyBatches[0])
 	batches := bs.readyBatches[1:]
 	bs.readyBatches = make([]*batch, len(bs.readyBatches)-1)
 	copy(bs.readyBatches, batches)
