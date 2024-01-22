@@ -22,13 +22,6 @@ const (
 	defaultMaxBytes      = 100 * 1024 // default max request size would be of size 100Kb
 )
 
-var (
-	ErrReqAlreadyExists    = fmt.Errorf("request already exists")
-	ErrReqAlreadyProcessed = fmt.Errorf("request already processed")
-	ErrRequestTooBig       = fmt.Errorf("submitted request is too big")
-	ErrSubmitTimeout       = fmt.Errorf("timeout submitting to request pool")
-)
-
 type Logger interface {
 	Debugf(template string, args ...interface{})
 	Infof(template string, args ...interface{})
