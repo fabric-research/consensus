@@ -6,13 +6,86 @@
 package request
 
 import (
+	"context"
 	"encoding/binary"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestBatchStore(t *testing.T) {
+	max := uint32(100)
+	lenByte := uint32(8)
+	var removed uint32
+	bs := NewBatchStore(max, max*lenByte, func(string) {
+		atomic.AddUint32(&removed, 1)
+	})
+	assert.NotNil(t, bs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	fetched := bs.Fetch(ctx)
+	assert.Len(t, fetched, 0)
+
+	requestInspector := &reqInspector{}
+
+	workerNum := runtime.NumCPU()
+	workPerWorker := 100000
+
+	loaded := make(chan string, workerNum*workPerWorker)
+
+	var wg sync.WaitGroup
+	wg.Add(workerNum)
+
+	for worker := 0; worker < workerNum; worker++ {
+		go func(worker int) {
+			defer wg.Done()
+
+			for i := 0; i < workPerWorker; i++ {
+				key := make([]byte, lenByte)
+				binary.BigEndian.PutUint32(key, uint32(worker))
+				binary.BigEndian.PutUint32(key[4:], uint32(i))
+				keyID := requestInspector.RequestID(key)
+				bs.Insert(keyID, key, uint32(len(key)))
+				loaded <- keyID
+			}
+		}(worker)
+	}
+
+	wg.Wait()
+	close(loaded)
+
+	for i := 0; i < 10; i++ {
+		ctx, _ = context.WithTimeout(context.Background(), time.Second)
+		fetched = bs.Fetch(ctx)
+		assert.Len(t, fetched, int(max))
+	}
+
+	wg.Add(workerNum)
+
+	for worker := 0; worker < workerNum; worker++ {
+		go func(worker int) {
+			defer wg.Done()
+
+			for i := 0; i < workPerWorker; i++ {
+				key := make([]byte, lenByte)
+				binary.BigEndian.PutUint32(key, uint32(worker))
+				binary.BigEndian.PutUint32(key[4:], uint32(i))
+				keyID := requestInspector.RequestID(key)
+				bs.Remove(keyID)
+			}
+		}(worker)
+	}
+
+	wg.Wait()
+
+	assert.Equal(t, workerNum*workPerWorker, int(removed))
+
+}
 
 func TestBatch(t *testing.T) {
 
