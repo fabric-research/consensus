@@ -49,7 +49,7 @@ type Pool struct {
 	semaphore       *semaphore.Weighted
 	closed          uint32
 	stopped         uint32
-	batchingEnabled uint32
+	batchingEnabled bool
 }
 
 // requestItem captures request related information
@@ -415,15 +415,11 @@ func (rp *Pool) Restart(batching bool) {
 }
 
 func (rp *Pool) setBatching(enabled bool) {
-	if enabled {
-		atomic.StoreUint32(&rp.batchingEnabled, 1)
-	} else {
-		atomic.StoreUint32(&rp.batchingEnabled, 0)
-	}
+	rp.batchingEnabled = enabled
 }
 
 func (rp *Pool) isBatchingEnabled() bool {
-	return atomic.LoadUint32(&rp.batchingEnabled) == 1
+	return rp.batchingEnabled
 }
 
 func (rp *Pool) moveToPendingStore() {
