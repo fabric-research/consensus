@@ -143,7 +143,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 		BatchMaxSizeBytes:     100 * 100,
 		AutoRemoveTimeout:     time.Second * 10,
 		SubmitTimeout:         time.Second * 10,
-		BatchTimeout:          time.Second,
+		BatchTimeout:          time.Millisecond,
 	})
 
 	defer pool.Close()
@@ -151,7 +151,8 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 	pool.Restart(true)
 
 	workerNum := runtime.NumCPU()
-	workerPerWorker := 10000
+	workerPerWorker := 100000
+	fmt.Printf("workerNum: %d; workerPerWorker: %d\n", workerNum, workerPerWorker)
 
 	var wg sync.WaitGroup
 	wg.Add(workerNum)
@@ -173,8 +174,6 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 		}(worker)
 	}
 
-	wg.Wait()
-
 	for {
 		requests := pool.NextRequests()
 		if len(requests) == 0 {
@@ -188,7 +187,10 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 		pool.RemoveRequests(requestsIDs...)
 	}
 
-	fmt.Println(time.Since(t1), batches)
+	wg.Wait()
+
+	since := time.Since(t1)
+	fmt.Println(since, batches)
 }
 
 type requestInspectorWithClientID struct{}
@@ -269,13 +271,14 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 	requestTimeoutHandler := &requestTimeoutHandler{}
 	submittedChan := make(chan struct{}, 1)
 	pool := bft.NewPool(sugaredLogger, requestInspector, requestTimeoutHandler, bft.PoolOptions{QueueSize: 1000 * 100, ForwardTimeout: time.Second * 20}, submittedChan)
-	batcher := bft.NewBatchBuilder(pool, submittedChan, 100, 100*100, time.Second)
+	batcher := bft.NewBatchBuilder(pool, submittedChan, 100, 100*100, time.Millisecond)
 
 	defer pool.Close()
 	defer batcher.Close()
 
 	workerNum := runtime.NumCPU()
-	workerPerWorker := 10000
+	workerPerWorker := 100000
+	fmt.Printf("workerNum: %d; workerPerWorker: %d\n", workerNum, workerPerWorker)
 
 	var wg sync.WaitGroup
 	wg.Add(workerNum)
@@ -297,8 +300,6 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 		}(worker)
 	}
 
-	wg.Wait()
-
 	for {
 		requests := batcher.NextBatch()
 		if len(requests) == 0 {
@@ -314,6 +315,9 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 		}
 	}
 
-	fmt.Println(time.Since(t1), batches)
+	wg.Wait()
+
+	since := time.Since(t1)
+	fmt.Println(since, batches)
 
 }
