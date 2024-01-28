@@ -12,18 +12,31 @@ import (
 	"github.com/SmartBFT-Go/consensus/pkg/types"
 )
 
-var submittedCount uint32
+var (
+	FirstStrikeTimeout  = time.Second * 30
+	SecondStrikeTimeout = time.Minute
+	AutoRemoveTimeout   = time.Minute * 2
+	SubmitTimeout       = time.Second * 10
+	MaxSize             = uint64(1000000)
+
+	workerPerWorker = 100000
+	workerNum       = runtime.NumCPU()
+
+	BatchTimeout      = time.Millisecond
+	BatchMaxSize      = uint32(100)
+	BatchMaxSizeBytes = uint32(100 * 100)
+)
 
 func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 	sugaredLogger := createLogger(t, 0)
 	requestInspector := &reqInspector{}
 
 	pool := NewPool(sugaredLogger, requestInspector, PoolOptions{
-		FirstStrikeThreshold:  time.Second * 20,
-		SecondStrikeThreshold: time.Minute,
-		MaxSize:               1000 * 100,
-		AutoRemoveTimeout:     time.Second * 10,
-		SubmitTimeout:         time.Second * 10,
+		FirstStrikeThreshold:  FirstStrikeTimeout,
+		SecondStrikeThreshold: SecondStrikeTimeout,
+		AutoRemoveTimeout:     AutoRemoveTimeout,
+		SubmitTimeout:         SubmitTimeout,
+		MaxSize:               MaxSize,
 		OnFirstStrikeTimeout: func(_ []byte) {
 			panic("timed out on request")
 		},
@@ -33,9 +46,6 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 
 	pool.Restart(false)
 
-	workerNum := runtime.NumCPU()
-	workerPerWorker := 10000
-
 	var wg sync.WaitGroup
 	wg.Add(workerNum)
 
@@ -54,8 +64,6 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 		}(worker)
 	}
 
-	wg.Wait()
-
 	var requestsIDs []string
 
 	for worker := 0; worker < workerNum; worker++ {
@@ -69,7 +77,10 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 
 	pool.RemoveRequests(requestsIDs...)
 
-	fmt.Println(time.Since(t1))
+	wg.Wait()
+
+	since := time.Since(t1)
+	fmt.Println(since)
 
 }
 
@@ -78,22 +89,19 @@ func TestPoolWithBatching_SubmitAndRemove(t *testing.T) {
 	requestInspector := &reqInspector{}
 
 	pool := NewPool(sugaredLogger, requestInspector, PoolOptions{
-		FirstStrikeThreshold:  time.Second * 20,
-		SecondStrikeThreshold: time.Minute,
-		MaxSize:               1000 * 100,
-		BatchMaxSize:          100,
-		BatchMaxSizeBytes:     100 * 100,
-		AutoRemoveTimeout:     time.Second * 10,
-		SubmitTimeout:         time.Second * 10,
-		BatchTimeout:          time.Second,
+		FirstStrikeThreshold:  FirstStrikeTimeout,
+		SecondStrikeThreshold: SecondStrikeTimeout,
+		AutoRemoveTimeout:     AutoRemoveTimeout,
+		SubmitTimeout:         SubmitTimeout,
+		MaxSize:               MaxSize,
+		BatchMaxSize:          BatchMaxSize,
+		BatchMaxSizeBytes:     BatchMaxSizeBytes,
+		BatchTimeout:          BatchTimeout,
 	})
 
 	defer pool.Close()
 
 	pool.Restart(true)
-
-	workerNum := runtime.NumCPU()
-	workerPerWorker := 10000
 
 	var wg sync.WaitGroup
 	wg.Add(workerNum)
@@ -113,8 +121,6 @@ func TestPoolWithBatching_SubmitAndRemove(t *testing.T) {
 		}(worker)
 	}
 
-	wg.Wait()
-
 	var requestsIDs []string
 
 	for worker := 0; worker < workerNum; worker++ {
@@ -128,7 +134,10 @@ func TestPoolWithBatching_SubmitAndRemove(t *testing.T) {
 
 	pool.RemoveRequests(requestsIDs...)
 
-	fmt.Println(time.Since(t1))
+	wg.Wait()
+
+	since := time.Since(t1)
+	fmt.Println(since)
 }
 
 func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
@@ -136,28 +145,25 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 	requestInspector := &reqInspector{}
 
 	pool := NewPool(sugaredLogger, requestInspector, PoolOptions{
-		FirstStrikeThreshold:  time.Second * 20,
-		SecondStrikeThreshold: time.Minute,
-		MaxSize:               1000 * 100,
-		BatchMaxSize:          100,
-		BatchMaxSizeBytes:     100 * 100,
-		AutoRemoveTimeout:     time.Second * 10,
-		SubmitTimeout:         time.Second * 10,
-		BatchTimeout:          time.Millisecond,
+		FirstStrikeThreshold:  FirstStrikeTimeout,
+		SecondStrikeThreshold: SecondStrikeTimeout,
+		AutoRemoveTimeout:     AutoRemoveTimeout,
+		SubmitTimeout:         SubmitTimeout,
+		MaxSize:               MaxSize,
+		BatchMaxSize:          BatchMaxSize,
+		BatchMaxSizeBytes:     BatchMaxSizeBytes,
+		BatchTimeout:          BatchTimeout,
 	})
 
 	defer pool.Close()
 
 	pool.Restart(true)
 
-	workerNum := runtime.NumCPU()
-	workerPerWorker := 100000
-	fmt.Printf("workerNum: %d; workerPerWorker: %d\n", workerNum, workerPerWorker)
-
 	var wg sync.WaitGroup
 	wg.Add(workerNum)
 
 	var batches int
+	var batchedRequests int
 
 	t1 := time.Now()
 
@@ -180,6 +186,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 			break
 		}
 		batches++
+		batchedRequests += len(requests)
 		var requestsIDs []string
 		for _, req := range requests {
 			requestsIDs = append(requestsIDs, requestInspector.RequestID(req))
@@ -190,7 +197,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 	wg.Wait()
 
 	since := time.Since(t1)
-	fmt.Println(since, batches)
+	fmt.Println(since, batches, batchedRequests)
 }
 
 type requestInspectorWithClientID struct{}
@@ -219,12 +226,15 @@ func TestOldRequestsPool_SubmitAndRemove(t *testing.T) {
 	requestInspector := &requestInspectorWithClientID{}
 	requestTimeoutHandler := &requestTimeoutHandler{}
 	submittedChan := make(chan struct{}, 1)
-	pool := bft.NewPool(sugaredLogger, requestInspector, requestTimeoutHandler, bft.PoolOptions{QueueSize: 1000 * 100, ForwardTimeout: time.Second * 20}, submittedChan)
+	pool := bft.NewPool(sugaredLogger, requestInspector, requestTimeoutHandler, bft.PoolOptions{
+		QueueSize:         int64(MaxSize),
+		ForwardTimeout:    FirstStrikeTimeout,
+		ComplainTimeout:   SecondStrikeTimeout,
+		AutoRemoveTimeout: AutoRemoveTimeout,
+		SubmitTimeout:     SubmitTimeout,
+	}, submittedChan)
 
 	defer pool.Close()
-
-	workerNum := runtime.NumCPU()
-	workerPerWorker := 10000
 
 	var wg sync.WaitGroup
 	wg.Add(workerNum)
@@ -244,8 +254,6 @@ func TestOldRequestsPool_SubmitAndRemove(t *testing.T) {
 		}(worker)
 	}
 
-	wg.Wait()
-
 	var requestsInfo []types.RequestInfo
 
 	for worker := 0; worker < workerNum; worker++ {
@@ -261,7 +269,10 @@ func TestOldRequestsPool_SubmitAndRemove(t *testing.T) {
 		pool.RemoveRequest(req)
 	}
 
-	fmt.Println(time.Since(t1))
+	wg.Wait()
+
+	since := time.Since(t1)
+	fmt.Println(since)
 
 }
 
@@ -270,20 +281,23 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 	requestInspector := &requestInspectorWithClientID{}
 	requestTimeoutHandler := &requestTimeoutHandler{}
 	submittedChan := make(chan struct{}, 1)
-	pool := bft.NewPool(sugaredLogger, requestInspector, requestTimeoutHandler, bft.PoolOptions{QueueSize: 1000 * 100, ForwardTimeout: time.Second * 20}, submittedChan)
-	batcher := bft.NewBatchBuilder(pool, submittedChan, 100, 100*100, time.Millisecond)
+	pool := bft.NewPool(sugaredLogger, requestInspector, requestTimeoutHandler, bft.PoolOptions{
+		QueueSize:         int64(MaxSize),
+		ForwardTimeout:    FirstStrikeTimeout,
+		ComplainTimeout:   SecondStrikeTimeout,
+		AutoRemoveTimeout: AutoRemoveTimeout,
+		SubmitTimeout:     SubmitTimeout,
+	}, submittedChan)
+	batcher := bft.NewBatchBuilder(pool, submittedChan, uint64(BatchMaxSize), uint64(BatchMaxSizeBytes), BatchTimeout)
 
 	defer pool.Close()
 	defer batcher.Close()
-
-	workerNum := runtime.NumCPU()
-	workerPerWorker := 100000
-	fmt.Printf("workerNum: %d; workerPerWorker: %d\n", workerNum, workerPerWorker)
 
 	var wg sync.WaitGroup
 	wg.Add(workerNum)
 
 	var batches int
+	var batchedRequests int
 
 	t1 := time.Now()
 
@@ -305,6 +319,7 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 		if len(requests) == 0 {
 			break
 		}
+		batchedRequests += len(requests)
 		batches++
 		var requestsInfo []types.RequestInfo
 		for _, req := range requests {
@@ -318,6 +333,6 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 	wg.Wait()
 
 	since := time.Since(t1)
-	fmt.Println(since, batches)
+	fmt.Println(since, batches, batchedRequests)
 
 }
