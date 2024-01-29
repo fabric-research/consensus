@@ -413,7 +413,7 @@ func TestBasicPrune(t *testing.T) {
 	pool.Restart(true)
 
 	res = pool.NextRequests()
-	assert.Len(t, res, 4)
+	assert.Len(t, res, 2)
 
 }
 

@@ -14,10 +14,10 @@ import (
 type BatchStore struct {
 	currentBatch      *batch
 	readyBatches      []*batch
-	fetchedBatches    []*batch
 	onDelete          func(key string)
 	batchMaxSize      uint32
 	batchMaxSizeBytes uint32
+	logger            Logger
 	keys2Batches      sync.Map
 	lock              sync.RWMutex
 	signal            sync.Cond
@@ -76,12 +76,13 @@ func (b *batch) Delete(key any) {
 	delete(b.m, key)
 }
 
-func NewBatchStore(batchMaxSize uint32, batchMaxSizeBytes uint32, onDelete func(string)) *BatchStore {
+func NewBatchStore(batchMaxSize uint32, batchMaxSizeBytes uint32, onDelete func(string), logger Logger) *BatchStore {
 	bs := &BatchStore{
 		currentBatch:      &batch{m: make(map[any]any, batchMaxSize*2)},
 		onDelete:          onDelete,
 		batchMaxSize:      batchMaxSize,
 		batchMaxSizeBytes: batchMaxSizeBytes,
+		logger:            logger,
 	}
 	bs.signal = sync.Cond{L: &bs.lock}
 
@@ -145,13 +146,6 @@ func (bs *BatchStore) Insert(key string, value interface{}, size uint32) bool {
 func (bs *BatchStore) ForEach(f func(k, v interface{})) {
 	bs.lock.RLock()
 	defer bs.lock.RUnlock()
-
-	for _, batch := range bs.fetchedBatches {
-		batch.Range(func(k, v interface{}) bool {
-			f(k, v)
-			return true
-		})
-	}
 
 	for _, batch := range bs.readyBatches {
 		batch.Range(func(k, v interface{}) bool {
@@ -224,13 +218,11 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 	// Mark the current batch as empty, since we are returning its content
 	// to the caller.
 	bs.currentBatch = &batch{m: make(map[any]any, bs.batchMaxSize*2)}
-	bs.fetchedBatches = append(bs.fetchedBatches, returnedBatch)
 	return bs.prepareBatch(returnedBatch)
 }
 
 func (bs *BatchStore) dequeueBatch() []interface{} {
 	result := bs.prepareBatch(bs.readyBatches[0])
-	bs.fetchedBatches = append(bs.fetchedBatches, bs.readyBatches[0])
 	batches := bs.readyBatches[1:]
 	bs.readyBatches = make([]*batch, len(bs.readyBatches)-1)
 	copy(bs.readyBatches, batches)

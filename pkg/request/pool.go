@@ -137,7 +137,7 @@ func (rp *Pool) createPendingStore() *PendingStore {
 func (rp *Pool) createBatchStore() *BatchStore {
 	return NewBatchStore(rp.options.BatchMaxSize, rp.options.BatchMaxSizeBytes, func(key string) {
 		rp.semaphore.Release(1)
-	})
+	}, rp.logger)
 }
 
 // Submit a request into the pool, returns an error when request is already in the pool
@@ -226,10 +226,14 @@ func (rp *Pool) NextRequests() [][]byte {
 	defer cancel()
 	requests := rp.batchStore.Fetch(ctx)
 
-	rawRequests := make([][]byte, len(requests))
-	for i := 0; i < len(requests); i++ {
+	size := len(requests)
+
+	rawRequests := make([][]byte, size)
+	for i := 0; i < size; i++ {
 		rawRequests[i] = requests[i].(*requestItem).request
 	}
+
+	rp.semaphore.Release(int64(size))
 
 	return rawRequests
 }
@@ -243,10 +247,7 @@ func (rp *Pool) RemoveRequests(requestsIDs ...string) {
 		return
 	}
 
-	for _, requestID := range requestsIDs {
-		rp.batchStore.Remove(requestID)
-	}
-	return
+	// No need to remove requests from batch store
 }
 
 func (rp *Pool) Prune(predicate func([]byte) error) {
@@ -261,6 +262,9 @@ func (rp *Pool) Prune(predicate func([]byte) error) {
 				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req))
 			}
 		})
+		for _, requestID := range requestsToRemove {
+			rp.batchStore.Remove(requestID)
+		}
 	} else {
 		requests := rp.pending.GetAllRequests(rp.options.MaxSize)
 		for _, req := range requests {
@@ -268,8 +272,8 @@ func (rp *Pool) Prune(predicate func([]byte) error) {
 				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req))
 			}
 		}
+		rp.pending.RemoveRequests(requestsToRemove...)
 	}
-	rp.RemoveRequests(requestsToRemove...)
 }
 
 // Reset resets the pool, with new pool options
