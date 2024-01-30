@@ -216,6 +216,7 @@ func TestBasicBatching(t *testing.T) {
 
 	pool.Restart(true)
 	assert.NoError(t, pool.Submit(byteReq1))
+	assert.Error(t, pool.Submit(byteReq1))
 	assert.Len(t, pool.NextRequests(), 1)
 
 	pool.RemoveRequests("1")
@@ -349,6 +350,7 @@ func TestBasicBatchingTimeout(t *testing.T) {
 
 	byteReq := makeTestRequest("1", "foo")
 	assert.NoError(t, pool.Submit(byteReq))
+	assert.Error(t, pool.Submit(byteReq))
 
 	go func() {
 		pool.Close()

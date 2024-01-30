@@ -200,7 +200,7 @@ func (rp *Pool) submitToBatchStore(reqID string, request []byte) error {
 	if !inserted {
 		rp.semaphore.Release(1)
 		rp.logger.Debugf("request %s has been already added to the pool", reqID)
-		return nil
+		return errors.Errorf("request %s already inserted", reqID)
 	}
 
 	rp.logger.Debugf("submitted request %s to batch store", reqID)

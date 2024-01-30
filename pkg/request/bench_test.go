@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,8 +51,6 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 
 	t1 := time.Now()
 
-	var submitErr uint32
-
 	for worker := 0; worker < workerNum; worker++ {
 		go func(worker int) {
 			defer wg.Done()
@@ -62,9 +59,7 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 				req := make([]byte, 8)
 				binary.BigEndian.PutUint32(req, uint32(worker))
 				binary.BigEndian.PutUint32(req[4:], uint32(i))
-				if pool.Submit(req) != nil {
-					atomic.AddUint32(&submitErr, 1)
-				}
+				pool.Submit(req)
 			}
 		}(worker)
 	}
@@ -85,7 +80,7 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 	wg.Wait()
 
 	since := time.Since(t1)
-	fmt.Println(since, submitErr)
+	fmt.Println(since)
 
 }
 
@@ -104,7 +99,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 		BatchTimeout:          BatchTimeout,
 	})
 
-	defer pool.Close()
+	// defer pool.Close()
 
 	pool.Restart(true)
 
@@ -113,7 +108,6 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 
 	var batches int
 	var batchedRequests int
-	var submitErr uint32
 
 	t1 := time.Now()
 
@@ -125,9 +119,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 				req := make([]byte, 8)
 				binary.BigEndian.PutUint32(req, uint32(worker))
 				binary.BigEndian.PutUint32(req[4:], uint32(i))
-				if err := pool.Submit(req); err != nil {
-					atomic.AddUint32(&submitErr, 1)
-				}
+				pool.Submit(req)
 			}
 		}(worker)
 	}
@@ -144,7 +136,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 	wg.Wait()
 
 	since := time.Since(t1)
-	fmt.Println(since, batches, batchedRequests, submitErr)
+	fmt.Println(since, batches, batchedRequests)
 }
 
 type requestInspectorWithClientID struct{}
