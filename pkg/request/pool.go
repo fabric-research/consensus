@@ -226,14 +226,10 @@ func (rp *Pool) NextRequests() [][]byte {
 	defer cancel()
 	requests := rp.batchStore.Fetch(ctx)
 
-	size := len(requests)
-
-	rawRequests := make([][]byte, size)
-	for i := 0; i < size; i++ {
+	rawRequests := make([][]byte, len(requests))
+	for i := 0; i < len(requests); i++ {
 		rawRequests[i] = requests[i].(*requestItem).request
 	}
-
-	rp.semaphore.Release(int64(size))
 
 	return rawRequests
 }
@@ -247,7 +243,10 @@ func (rp *Pool) RemoveRequests(requestsIDs ...string) {
 		return
 	}
 
-	// No need to remove requests from batch store
+	for _, requestID := range requestsIDs {
+		rp.batchStore.Remove(requestID)
+	}
+	return
 }
 
 func (rp *Pool) Prune(predicate func([]byte) error) {

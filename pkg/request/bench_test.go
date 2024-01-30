@@ -99,7 +99,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 		BatchTimeout:          BatchTimeout,
 	})
 
-	// defer pool.Close()
+	defer pool.Close()
 
 	pool.Restart(true)
 
@@ -131,6 +131,11 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 		}
 		batches++
 		batchedRequests += len(requests)
+		var requestsIDs []string
+		for _, req := range requests {
+			requestsIDs = append(requestsIDs, requestInspector.RequestID(req))
+		}
+		pool.RemoveRequests(requestsIDs...)
 	}
 
 	wg.Wait()
