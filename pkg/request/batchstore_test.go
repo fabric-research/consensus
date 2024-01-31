@@ -100,7 +100,7 @@ func TestBatch(t *testing.T) {
 	workerNum := runtime.NumCPU()
 	workPerWorker := 100000
 
-	b := &batch{m: make(map[any]any, workerNum*workPerWorker*2)}
+	b := &batch{}
 
 	assert.False(t, b.isEnqueued())
 	b.markEnqueued()

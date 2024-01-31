@@ -31,14 +31,13 @@ type batch struct {
 	// and increment both using one atomic operation.
 	sizeBytes uint64
 	enqueued  bool
-	m         map[any]any
+	m         sync.Map
 }
 
 func (b *batch) Load(key any) (value any, ok bool) {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
-	val, exist := b.m[key]
-	return val, exist
+	return b.m.Load(key)
 }
 
 func (b *batch) isEnqueued() bool {
@@ -56,29 +55,24 @@ func (b *batch) markEnqueued() {
 func (b *batch) Store(key, value any) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.m[key] = value
+	b.m.Store(key, value)
 }
 
 func (b *batch) Range(f func(key, value any) bool) {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
-	for k, v := range b.m {
-		ok := f(k, v)
-		if !ok {
-			return
-		}
-	}
+	b.m.Range(f)
 }
 
 func (b *batch) Delete(key any) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	delete(b.m, key)
+	b.m.Delete(key)
 }
 
 func NewBatchStore(batchMaxSize uint32, batchMaxSizeBytes uint32, onDelete func(string), logger Logger) *BatchStore {
 	bs := &BatchStore{
-		currentBatch:      &batch{m: make(map[any]any, batchMaxSize*2)},
+		currentBatch:      &batch{},
 		onDelete:          onDelete,
 		batchMaxSize:      batchMaxSize,
 		batchMaxSizeBytes: batchMaxSizeBytes,
@@ -136,7 +130,7 @@ func (bs *BatchStore) Insert(key string, value interface{}, size uint32) bool {
 		currBatch.markEnqueued()
 		bs.readyBatches = append(bs.readyBatches, currBatch)
 		// Create an empty batch to be used
-		bs.currentBatch = &batch{m: make(map[any]any, bs.batchMaxSize*2)}
+		bs.currentBatch = &batch{}
 		// If we have a waiting fetch, notify it
 		bs.signal.Signal()
 		bs.lock.Unlock()
@@ -217,7 +211,7 @@ func (bs *BatchStore) Fetch(ctx context.Context) []interface{} {
 	}
 	// Mark the current batch as empty, since we are returning its content
 	// to the caller.
-	bs.currentBatch = &batch{m: make(map[any]any, bs.batchMaxSize*2)}
+	bs.currentBatch = &batch{}
 	return bs.prepareBatch(returnedBatch)
 }
 
