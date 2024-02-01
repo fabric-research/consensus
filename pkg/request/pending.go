@@ -35,6 +35,8 @@ type PendingStore struct {
 	Epoch                 time.Duration
 	OnDelete              func(key string)
 	lastTick              atomic.Value
+	lastEpochChange       time.Time
+	lastProcessedGC       time.Time
 	reqID2Bucket          *sync.Map
 	processed             sync.Map
 	currentBucket         atomic.Value
@@ -56,6 +58,8 @@ func (ps *PendingStore) Init() {
 	ps.closeOnce = sync.Once{}
 	ps.resetChan = make(chan struct{})
 	ps.finishResetChan = make(chan struct{})
+	ps.lastEpochChange = ps.StartTime
+	ps.lastProcessedGC = ps.StartTime
 }
 
 func (ps *PendingStore) Start() {
@@ -71,8 +75,9 @@ func (ps *PendingStore) run() {
 			return
 		case <-ps.resetChan:
 			ps.reset()
-		default:
-			ps.changeEpochs()
+		case now := <-ps.Time:
+			ps.lastTick.Store(now)
+			ps.changeEpochs(now)
 		}
 	}
 }
@@ -132,25 +137,20 @@ func (ps *PendingStore) isClosed() bool {
 	}
 }
 
-func (ps *PendingStore) changeEpochs() {
-	lastEpochChange := ps.StartTime
-	lastProcessedGC := ps.StartTime
-
-	now := <-ps.Time
-	ps.lastTick.Store(now)
-	if now.Sub(lastEpochChange) <= ps.Epoch {
+func (ps *PendingStore) changeEpochs(now time.Time) {
+	if now.Sub(ps.lastEpochChange) <= ps.Epoch {
 		return
 	}
 
-	lastEpochChange = now
+	ps.lastEpochChange = now
 
 	ps.bucketsLock.Lock()
 	defer ps.bucketsLock.Unlock()
 
 	ps.rotateBuckets(now)
 	ps.garbageCollectEmptyBuckets()
-	if now.Sub(lastProcessedGC) > ps.ReqIDGCInterval {
-		lastProcessedGC = now
+	if now.Sub(ps.lastProcessedGC) > ps.ReqIDGCInterval {
+		ps.lastProcessedGC = now
 		ps.garbageCollectProcessed(now)
 	}
 

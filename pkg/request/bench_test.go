@@ -25,7 +25,7 @@ var (
 
 	BatchTimeout      = time.Second
 	BatchMaxSize      = uint32(100)
-	BatchMaxSizeBytes = uint32(100 * 100)
+	BatchMaxSizeBytes = BatchMaxSize * 100
 )
 
 func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
@@ -210,7 +210,7 @@ func TestPoolBoth(t *testing.T) {
 		}
 		batches++
 		batchedRequests += len(requests)
-		var requestsIDs []string
+		requestsIDs := make([]string, 0, BatchMaxSize*2)
 		for _, req := range requests {
 			requestsIDs = append(requestsIDs, requestInspector.RequestID(req))
 		}
@@ -419,7 +419,7 @@ func TestOldTwoRequestsPoolAndBatcher(t *testing.T) {
 		}
 		batchedRequests += len(requests)
 		batches++
-		var requestsInfo []types.RequestInfo
+		requestsInfo := make([]types.RequestInfo, 0, BatchMaxSize*2)
 		for _, req := range requests {
 			requestsInfo = append(requestsInfo, requestInspector.RequestID(req))
 		}
