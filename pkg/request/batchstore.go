@@ -247,6 +247,8 @@ func (bs *BatchStore) dequeueBatch() []interface{} {
 }
 
 func (bs *BatchStore) prepareBatch(readyBatch *batch) []interface{} {
+	readyBatch.markEnqueued() // make sure it is marked as enqueued before fetch returns it
+
 	batch := make([]interface{}, 0, bs.batchMaxSize*2)
 
 	readyBatch.Range(func(k, v interface{}) bool {
