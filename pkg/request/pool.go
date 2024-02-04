@@ -253,18 +253,13 @@ func (rp *Pool) Prune(predicate func([]byte) error) {
 	rp.lock.RLock()
 	defer rp.lock.RUnlock()
 
-	requestsToRemove := make([]string, 0, rp.options.MaxSize)
 	if rp.isBatchingEnabled() {
-		rp.batchStore.ForEach(func(_, v interface{}) {
+		rp.batchStore.Prune(func(_, v interface{}) error {
 			req := v.(*requestItem).request
-			if predicate(req) != nil {
-				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req))
-			}
+			return predicate(req)
 		})
-		for _, requestID := range requestsToRemove {
-			rp.batchStore.Remove(requestID)
-		}
 	} else {
+		requestsToRemove := make([]string, 0, rp.options.MaxSize)
 		requests := rp.pending.GetAllRequests(rp.options.MaxSize)
 		for _, req := range requests {
 			if predicate(req) != nil {

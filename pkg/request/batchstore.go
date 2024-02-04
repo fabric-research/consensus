@@ -70,6 +70,18 @@ func (b *batch) Delete(key any) {
 	b.m.Delete(key)
 }
 
+func (b *batch) Prune(f func(key, value any) error) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	delFunc := func(key, value any) bool {
+		if f(key, value) != nil {
+			b.m.Delete(key)
+		}
+		return true
+	}
+	b.m.Range(delFunc)
+}
+
 func NewBatchStore(batchMaxSize uint32, batchMaxSizeBytes uint32, onDelete func(string), logger Logger) *BatchStore {
 	bs := &BatchStore{
 		currentBatch:      &batch{},
@@ -152,6 +164,17 @@ func (bs *BatchStore) ForEach(f func(k, v interface{})) {
 		f(k, v)
 		return true
 	})
+}
+
+func (bs *BatchStore) Prune(f func(k, v interface{}) error) {
+	bs.lock.RLock()
+	defer bs.lock.RUnlock()
+
+	for _, batch := range bs.readyBatches {
+		batch.Prune(f)
+	}
+
+	bs.currentBatch.Prune(f)
 }
 
 func (bs *BatchStore) Remove(key string) {
