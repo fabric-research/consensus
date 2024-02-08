@@ -270,22 +270,12 @@ func (ps *PendingStore) RemoveRequests(requestIDs ...string) {
 }
 
 func (ps *PendingStore) removeRequestsByWorker(workerID int, requestIDs []string, workerNum int, now time.Time) {
-	var ensureSingleDelete sync.Map
-
 	for i, reqID := range requestIDs {
 		if ps.isClosed() {
 			return
 		}
 
 		if i%workerNum != workerID {
-			continue
-		}
-
-		// We can only insert a request once, so we should ensure
-		// we cannot delete it twice.
-		// Deleting it twice will mess up our accounting and will cause an overflow
-		// in the amount of requests in the bucket.
-		if _, duplicateReq := ensureSingleDelete.LoadOrStore(reqID, struct{}{}); duplicateReq {
 			continue
 		}
 
