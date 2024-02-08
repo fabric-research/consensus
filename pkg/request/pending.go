@@ -38,7 +38,6 @@ type PendingStore struct {
 	lastEpochChange       time.Time
 	lastProcessedGC       time.Time
 	reqID2Bucket          *sync.Map
-	processed             sync.Map
 	currentBucket         atomic.Value
 	buckets               []*bucket
 	stopped               uint32
@@ -52,7 +51,7 @@ type PendingStore struct {
 
 func (ps *PendingStore) Init() {
 	ps.reqID2Bucket = new(sync.Map)
-	ps.currentBucket.Store(newBucket(ps.reqID2Bucket, 0))
+	ps.currentBucket.Store(newBucket(ps.reqID2Bucket, 1))
 	ps.lastTick.Store(ps.StartTime)
 	ps.closeChan = make(chan struct{})
 	ps.closeOnce = sync.Once{}
@@ -166,11 +165,13 @@ func (ps *PendingStore) changeEpochs(now time.Time) {
 }
 
 func (ps *PendingStore) garbageCollectProcessed(now time.Time) {
-	ps.processed.Range(func(k, v interface{}) bool {
-		entryTime := v.(time.Time)
+	ps.reqID2Bucket.Range(func(k, v interface{}) bool {
+		b := v.(*bucket)
 
-		if now.Sub(entryTime) > ps.ReqIDLifetime {
-			ps.processed.Delete(k)
+		if b.isDummyBucket() {
+			if now.Sub(b.processedTimestamp) > ps.ReqIDLifetime {
+				ps.reqID2Bucket.Delete(k)
+			}
 		}
 
 		return true
@@ -293,34 +294,13 @@ func (ps *PendingStore) removeRequestsByWorker(workerID int, requestIDs []string
 }
 
 func (ps *PendingStore) removeRequest(reqID string, now time.Time) {
-	_, existed := ps.processed.LoadOrStore(reqID, now)
-
-	// If the request was not processed before, it was not inserted before.
-	// So no point in removing it.
-	if !existed {
+	b, existed := ps.reqID2Bucket.LoadOrStore(reqID, &bucket{id: 0, processedTimestamp: now})
+	bucket := b.(*bucket)
+	if !existed || bucket.isDummyBucket() {
 		return
 	}
 
-	insertPending := existed
-
-	// However, if we were too late to store, then either an insert takes place
-	// concurrently, or happened in the past.
-	// We need to wait for the insert to complete before we continue the deletion,
-	// otherwise we will have a zombie request that will never be deleted.
-
-	for insertPending {
-		if ps.isClosed() {
-			return
-		}
-
-		b, exists := ps.reqID2Bucket.Load(reqID)
-		if !exists {
-			continue
-		}
-
-		deletionSucceeded := b.(*bucket).Delete(reqID)
-		insertPending = !deletionSucceeded
-	}
+	bucket.Delete(reqID)
 
 	ps.OnDelete(reqID)
 }
@@ -332,11 +312,6 @@ func (ps *PendingStore) Submit(request []byte) error {
 	}
 
 	reqID := ps.Inspector.RequestID(request)
-
-	if _, loaded := ps.processed.LoadOrStore(reqID, ps.now()); loaded {
-		ps.Logger.Debugf("request %s already processed", reqID)
-		return errors.Errorf("request %s already processed", reqID)
-	}
 
 	// Insertion may fail if we have a concurrent sealing of the bucket.
 	// In such a case, wait for a new un-sealed bucket to replace the current bucket.
@@ -387,10 +362,15 @@ type bucket struct {
 	firstStrikeTimestamp time.Time
 	zeroTime             time.Time
 	requests             sync.Map
+	processedTimestamp   time.Time
 }
 
 func newBucket(reqID2Bucket *sync.Map, id uint64) *bucket {
 	return &bucket{reqID2Bucket: reqID2Bucket, id: id}
+}
+
+func (b *bucket) isDummyBucket() bool {
+	return b.id == 0
 }
 
 func (b *bucket) getSize() uint32 {
