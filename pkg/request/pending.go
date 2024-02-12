@@ -41,7 +41,6 @@ type PendingStore struct {
 	currentBucket         atomic.Value
 	buckets               []*bucket
 	stopped               uint32
-	bucketsLock           sync.Mutex
 	closedWG              sync.WaitGroup
 	closeOnce             sync.Once
 	closeChan             chan struct{}
@@ -122,6 +121,7 @@ func (ps *PendingStore) Close() {
 		if ps.closeChan == nil {
 			return
 		}
+		ps.Stop()
 		close(ps.closeChan)
 	})
 	ps.closedWG.Wait()
@@ -137,24 +137,21 @@ func (ps *PendingStore) isClosed() bool {
 }
 
 func (ps *PendingStore) changeEpochs(now time.Time) {
+	if ps.isStopped() {
+		return
+	}
+
 	if now.Sub(ps.lastEpochChange) <= ps.Epoch {
 		return
 	}
 
 	ps.lastEpochChange = now
 
-	ps.bucketsLock.Lock()
-	defer ps.bucketsLock.Unlock()
-
 	ps.rotateBuckets(now)
 	ps.garbageCollectEmptyBuckets()
 	if now.Sub(ps.lastProcessedGC) > ps.ReqIDGCInterval {
 		ps.lastProcessedGC = now
 		ps.garbageCollectProcessed(now)
-	}
-
-	if ps.isStopped() {
-		return
 	}
 
 	ps.checkFirstStrike(now)
@@ -295,6 +292,23 @@ func (ps *PendingStore) removeRequest(reqID string, now time.Time) {
 	ps.OnDelete(reqID)
 }
 
+func (ps *PendingStore) Prune(predicate func([]byte) error) {
+	ps.reqID2Bucket.Range(func(key, value any) bool {
+		reqID := key.(string)
+		b := value.(*bucket)
+		request, exists := b.requests.Load(reqID)
+		if !exists {
+			return true
+		}
+		if predicate(request.([]byte)) == nil {
+			return true
+		}
+		b.Delete(reqID)
+		ps.OnDelete(reqID)
+		return true
+	})
+}
+
 func (ps *PendingStore) Submit(request []byte) error {
 
 	if ps.isClosed() {
@@ -322,10 +336,11 @@ func (ps *PendingStore) now() time.Time {
 // GetAllRequests returns all stored requests in the same order of their arrival, the oldest one will be the first
 func (ps *PendingStore) GetAllRequests(max uint64) [][]byte {
 
-	requests := make([][]byte, 0, max*2)
+	if !ps.isStopped() {
+		panic("GetAllRequests should be called only when the pending store is stopped")
+	}
 
-	ps.bucketsLock.Lock()
-	defer ps.bucketsLock.Unlock()
+	requests := make([][]byte, 0, max*2)
 
 	for _, b := range ps.buckets {
 		b.requests.Range(func(_, v interface{}) bool {

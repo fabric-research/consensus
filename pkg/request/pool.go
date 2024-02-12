@@ -259,14 +259,7 @@ func (rp *Pool) Prune(predicate func([]byte) error) {
 			return predicate(req)
 		})
 	} else {
-		requestsToRemove := make([]string, 0, rp.options.MaxSize)
-		requests := rp.pending.GetAllRequests(rp.options.MaxSize)
-		for _, req := range requests {
-			if predicate(req) != nil {
-				requestsToRemove = append(requestsToRemove, rp.inspector.RequestID(req))
-			}
-		}
-		rp.pending.RemoveRequests(requestsToRemove...)
+		rp.pending.Prune(predicate)
 	}
 }
 
