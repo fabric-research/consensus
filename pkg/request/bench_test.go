@@ -19,15 +19,84 @@ var (
 	SubmitTimeout       = time.Second * 10
 	MaxSize             = uint64(1000000)
 
-	workerPerWorker = 100000
-	workerNum       = runtime.NumCPU()
+	workPerWorker = 100000
+	workerNum     = runtime.NumCPU()
 
 	BatchTimeout      = time.Second
 	BatchMaxSize      = uint32(100)
 	BatchMaxSizeBytes = BatchMaxSize * 100
 )
 
-func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
+func TestNewPool_PendingStore(t *testing.T) {
+	sugaredLogger := createLogger(t, 0)
+	requestInspector := &reqInspector{}
+
+	pool := NewPool(sugaredLogger, requestInspector, PoolOptions{
+		FirstStrikeThreshold:  FirstStrikeTimeout,
+		SecondStrikeThreshold: SecondStrikeTimeout,
+		AutoRemoveTimeout:     AutoRemoveTimeout,
+		SubmitTimeout:         SubmitTimeout,
+		MaxSize:               MaxSize,
+		OnFirstStrikeTimeout: func(_ []byte) {
+			panic("timed out on request")
+		},
+	})
+
+	defer pool.Close()
+
+	pool.Restart(false)
+
+	reqIDsSent := make(chan string, workerNum*workPerWorker)
+
+	var wg sync.WaitGroup
+	wg.Add(workerNum)
+
+	t1 := time.Now()
+
+	for worker := 0; worker < workerNum; worker++ {
+		go func(worker int) {
+			defer wg.Done()
+
+			for i := 0; i < workPerWorker; i++ {
+				req := make([]byte, 8)
+				binary.BigEndian.PutUint32(req, uint32(worker))
+				binary.BigEndian.PutUint32(req[4:], uint32(i))
+
+				reqID := requestInspector.RequestID(req)
+
+				reqIDsSent <- reqID
+
+				pool.Submit(req)
+			}
+		}(worker)
+	}
+
+	go func() {
+		wg.Wait()
+		close(reqIDsSent)
+	}()
+
+	virtualBlock := make([]string, 0, workerNum*workPerWorker)
+	var removed int
+	var end bool
+
+	for !end {
+		select {
+		case reqID := <-reqIDsSent:
+			end = reqID == ""
+			virtualBlock = append(virtualBlock, reqID)
+		default:
+			pool.RemoveRequests(virtualBlock...)
+			removed += len(virtualBlock)
+			virtualBlock = make([]string, 0, workerNum*workPerWorker)
+		}
+	}
+
+	since := time.Since(t1)
+	fmt.Println(since, removed)
+}
+
+func TestNewPool_WithoutBatching_SubmitAndRemove(t *testing.T) {
 	sugaredLogger := createLogger(t, 0)
 	requestInspector := &reqInspector{}
 
@@ -52,7 +121,7 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 	var requestsIDs []string
 
 	for worker := 0; worker < workerNum; worker++ {
-		for i := 0; i < workerPerWorker; i++ {
+		for i := 0; i < workPerWorker; i++ {
 			req := make([]byte, 8)
 			binary.BigEndian.PutUint32(req, uint32(worker))
 			binary.BigEndian.PutUint32(req[4:], uint32(i))
@@ -66,7 +135,7 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 		go func(worker int) {
 			defer wg.Done()
 
-			for i := 0; i < workerPerWorker; i++ {
+			for i := 0; i < workPerWorker; i++ {
 				req := make([]byte, 8)
 				binary.BigEndian.PutUint32(req, uint32(worker))
 				binary.BigEndian.PutUint32(req[4:], uint32(i))
@@ -84,7 +153,7 @@ func TestPoolWithoutBatching_SubmitAndRemove(t *testing.T) {
 
 }
 
-func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
+func TestNewPool_BatchStore(t *testing.T) {
 	sugaredLogger := createLogger(t, 0)
 	requestInspector := &reqInspector{}
 
@@ -115,7 +184,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 		go func(worker int) {
 			defer wg.Done()
 
-			for i := 0; i < workerPerWorker; i++ {
+			for i := 0; i < workPerWorker; i++ {
 				req := make([]byte, 8)
 				binary.BigEndian.PutUint32(req, uint32(worker))
 				binary.BigEndian.PutUint32(req[4:], uint32(i))
@@ -124,7 +193,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 		}(worker)
 	}
 
-	for batchedRequests < ((workerNum * workerPerWorker) - int(BatchMaxSize)) {
+	for batchedRequests < ((workerNum * workPerWorker) - int(BatchMaxSize)) {
 		requests := pool.NextRequests()
 		if len(requests) == 0 {
 			break
@@ -144,7 +213,7 @@ func TestPoolWithBatching_SubmitBatchAndRemove(t *testing.T) {
 	fmt.Println(since, batches, batchedRequests)
 }
 
-func TestPoolBoth(t *testing.T) {
+func TestNewPool_Combined(t *testing.T) {
 	sugaredLogger := createLogger(t, 0)
 	requestInspector := &reqInspector{}
 
@@ -188,7 +257,7 @@ func TestPoolBoth(t *testing.T) {
 		go func(worker int) {
 			defer wg.Done()
 
-			for i := 0; i < workerPerWorker; i++ {
+			for i := 0; i < workPerWorker; i++ {
 				req := make([]byte, 8)
 				binary.BigEndian.PutUint32(req, uint32(worker))
 				binary.BigEndian.PutUint32(req[4:], uint32(i))
@@ -198,7 +267,7 @@ func TestPoolBoth(t *testing.T) {
 		}(worker)
 	}
 
-	for batchedRequests < ((workerNum * workerPerWorker) - int(BatchMaxSize)) {
+	for batchedRequests < ((workerNum * workPerWorker) - int(BatchMaxSize)) {
 		requests := primaryPool.NextRequests()
 		if len(requests) == 0 {
 			break
@@ -240,7 +309,74 @@ func (h *requestTimeoutHandler) OnLeaderFwdRequestTimeout(request []byte, reques
 
 func (h *requestTimeoutHandler) OnAutoRemoveTimeout(requestInfo types.RequestInfo) {}
 
-func TestOldRequestsPool_SubmitAndRemove(t *testing.T) {
+func TestOldPool_WithoutBatcher(t *testing.T) {
+	sugaredLogger := createLogger(t, 0)
+	requestInspector := &requestInspectorWithClientID{}
+	requestTimeoutHandler := &requestTimeoutHandler{}
+	submittedChan := make(chan struct{}, 1)
+	pool := bft.NewPool(sugaredLogger, requestInspector, requestTimeoutHandler, bft.PoolOptions{
+		QueueSize:         int64(MaxSize),
+		ForwardTimeout:    FirstStrikeTimeout,
+		ComplainTimeout:   SecondStrikeTimeout,
+		AutoRemoveTimeout: AutoRemoveTimeout,
+		SubmitTimeout:     SubmitTimeout,
+	}, submittedChan)
+
+	defer pool.Close()
+
+	reqIDsSent := make(chan types.RequestInfo, workerNum*workPerWorker)
+
+	var wg sync.WaitGroup
+	wg.Add(workerNum)
+
+	t1 := time.Now()
+
+	for worker := 0; worker < workerNum; worker++ {
+		go func(worker int) {
+			defer wg.Done()
+
+			for i := 0; i < workPerWorker; i++ {
+				req := make([]byte, 8)
+				binary.BigEndian.PutUint32(req, uint32(worker))
+				binary.BigEndian.PutUint32(req[4:], uint32(i))
+
+				reqID := requestInspector.RequestID(req)
+
+				reqIDsSent <- reqID
+
+				pool.Submit(req)
+			}
+		}(worker)
+	}
+
+	go func() {
+		wg.Wait()
+		close(reqIDsSent)
+	}()
+
+	virtualBlock := make([]types.RequestInfo, 0, workerNum*workPerWorker)
+	var removed int
+	var end bool
+
+	for !end {
+		select {
+		case reqID := <-reqIDsSent:
+			end = reqID.ID == ""
+			virtualBlock = append(virtualBlock, reqID)
+		default:
+			for _, req := range virtualBlock {
+				pool.RemoveRequest(req)
+			}
+			removed += len(virtualBlock)
+			virtualBlock = make([]types.RequestInfo, 0, workerNum*workPerWorker)
+		}
+	}
+
+	since := time.Since(t1)
+	fmt.Println(since, removed)
+}
+
+func TestOldPool_WithoutBatching_SubmitAndRemove(t *testing.T) {
 	sugaredLogger := createLogger(t, 0)
 	requestInspector := &requestInspectorWithClientID{}
 	requestTimeoutHandler := &requestTimeoutHandler{}
@@ -261,7 +397,7 @@ func TestOldRequestsPool_SubmitAndRemove(t *testing.T) {
 	var requestsInfo []types.RequestInfo
 
 	for worker := 0; worker < workerNum; worker++ {
-		for i := 0; i < workerPerWorker; i++ {
+		for i := 0; i < workPerWorker; i++ {
 			req := make([]byte, 8)
 			binary.BigEndian.PutUint32(req, uint32(worker))
 			binary.BigEndian.PutUint32(req[4:], uint32(i))
@@ -275,7 +411,7 @@ func TestOldRequestsPool_SubmitAndRemove(t *testing.T) {
 		go func(worker int) {
 			defer wg.Done()
 
-			for i := 0; i < workerPerWorker; i++ {
+			for i := 0; i < workPerWorker; i++ {
 				req := make([]byte, 8)
 				binary.BigEndian.PutUint32(req, uint32(worker))
 				binary.BigEndian.PutUint32(req[4:], uint32(i))
@@ -295,7 +431,7 @@ func TestOldRequestsPool_SubmitAndRemove(t *testing.T) {
 
 }
 
-func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
+func TestOldPool_WithBatcher(t *testing.T) {
 	sugaredLogger := createLogger(t, 0)
 	requestInspector := &requestInspectorWithClientID{}
 	requestTimeoutHandler := &requestTimeoutHandler{}
@@ -324,7 +460,7 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 		go func(worker int) {
 			defer wg.Done()
 
-			for i := 0; i < workerPerWorker; i++ {
+			for i := 0; i < workPerWorker; i++ {
 				req := make([]byte, 8)
 				binary.BigEndian.PutUint32(req, uint32(worker))
 				binary.BigEndian.PutUint32(req[4:], uint32(i))
@@ -333,7 +469,7 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 		}(worker)
 	}
 
-	for batchedRequests < ((workerNum * workerPerWorker) - int(BatchMaxSize)) {
+	for batchedRequests < ((workerNum * workPerWorker) - int(BatchMaxSize)) {
 		requests := batcher.NextBatch()
 		if len(requests) == 0 {
 			break
@@ -356,7 +492,7 @@ func TestOldRequestsPoolAndBatcher_SubmitBatchAndRemove(t *testing.T) {
 
 }
 
-func TestOldTwoRequestsPoolAndBatcher(t *testing.T) {
+func TestOldPool_Combined(t *testing.T) {
 	sugaredLogger := createLogger(t, 0)
 	requestInspector := &requestInspectorWithClientID{}
 	requestTimeoutHandler := &requestTimeoutHandler{}
@@ -393,7 +529,7 @@ func TestOldTwoRequestsPoolAndBatcher(t *testing.T) {
 		go func(worker int) {
 			defer wg.Done()
 
-			for i := 0; i < workerPerWorker; i++ {
+			for i := 0; i < workPerWorker; i++ {
 				req := make([]byte, 8)
 				binary.BigEndian.PutUint32(req, uint32(worker))
 				binary.BigEndian.PutUint32(req[4:], uint32(i))
@@ -403,7 +539,7 @@ func TestOldTwoRequestsPoolAndBatcher(t *testing.T) {
 		}(worker)
 	}
 
-	for batchedRequests < ((workerNum * workerPerWorker) - int(BatchMaxSize)) {
+	for batchedRequests < ((workerNum * workPerWorker) - int(BatchMaxSize)) {
 		requests := batcher.NextBatch()
 		if len(requests) == 0 {
 			break
