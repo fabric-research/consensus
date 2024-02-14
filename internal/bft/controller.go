@@ -132,7 +132,7 @@ type Controller struct {
 	decisionChan         chan decision
 	deliverChan          chan struct{}
 	leaderToken          chan struct{}
-	verificationSequence uint64
+	verificationSequence atomic.Uint64
 
 	controllerDone sync.WaitGroup
 
@@ -629,7 +629,7 @@ func (c *Controller) sync() (viewNum uint64, seq uint64, decisions uint64) {
 		c.Logger.Infof("Synchronizer returned with sequence %d while the controller is at sequence %d", latestDecisionSeq, controllerSequence)
 		c.Logger.Debugf("Node %d is setting the checkpoint after sync returned with view %d and seq %d", c.ID, latestDecisionViewNum, latestDecisionSeq)
 		c.Checkpoint.Set(latestDecision.Proposal, latestDecision.Signatures)
-		c.verificationSequence = uint64(latestDecision.Proposal.VerificationSequence)
+		c.verificationSequence.Store(uint64(latestDecision.Proposal.VerificationSequence))
 		newProposalSequence = latestDecisionSeq + 1
 		newDecisionsInView = latestDecisionDecisions + 1
 	}
@@ -733,12 +733,12 @@ func (c *Controller) relinquishSyncToken() {
 
 // MaybePruneRevokedRequests prunes requests with different verification sequence
 func (c *Controller) MaybePruneRevokedRequests() {
-	oldVerSqn := c.verificationSequence
+	oldVerSqn := c.verificationSequence.Load()
 	newVerSqn := c.Verifier.VerificationSequence()
 	if newVerSqn == oldVerSqn {
 		return
 	}
-	c.verificationSequence = newVerSqn
+	c.verificationSequence.Store(newVerSqn)
 
 	c.Logger.Infof("Verification sequence changed: %d --> %d", oldVerSqn, newVerSqn)
 	c.RequestPool.Prune(func(req []byte) error {
@@ -796,7 +796,7 @@ func (c *Controller) Start(startViewNumber uint64, startProposalSequence uint64,
 	c.Logger.Debugf("The number of nodes (N) is %d, F is %d, and the quorum size is %d", c.N, F, Q)
 	c.quorum = Q
 
-	c.verificationSequence = c.Verifier.VerificationSequence()
+	c.verificationSequence.Store(c.Verifier.VerificationSequence())
 
 	if syncOnStart {
 		startViewNumber, startProposalSequence, startDecisionsInView = c.syncOnStart(startViewNumber, startProposalSequence, startDecisionsInView)
