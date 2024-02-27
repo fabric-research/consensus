@@ -40,8 +40,8 @@ type Configuration struct {
 	// RequestComplainTimeout is started when RequestForwardTimeout expires, and defines the interval after which the
 	// node complains about the view leader.
 	RequestComplainTimeout time.Duration
-	// RequestAutoRemoveTimeout is started when RequestComplainTimeout expires, and defines the interval after which
-	// a request is removed (dropped) from the request pool.
+	// RequestAutoRemoveTimeout is started when a request is initially submitted to the request pool,
+	// and defines the interval after which the request is removed (dropped) from the request pool.
 	RequestAutoRemoveTimeout time.Duration
 
 	// ViewChangeResendInterval defined the interval in which the ViewChange message is resent.

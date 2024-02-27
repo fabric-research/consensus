@@ -8,7 +8,20 @@ package bft
 import (
 	"sync"
 	"time"
+
+	"github.com/SmartBFT-Go/consensus/pkg/types"
 )
+
+type RequestPool interface {
+	Prune(predicate func([]byte) error)
+	Submit(request []byte) error
+	Size() int
+	NextRequests(maxCount int, maxSizeBytes uint64, check bool) (batch [][]byte, full bool)
+	RemoveRequest(request types.RequestInfo) error
+	StopTimers()
+	RestartTimers()
+	Close()
+}
 
 // BatchBuilder implements Batcher
 type BatchBuilder struct {

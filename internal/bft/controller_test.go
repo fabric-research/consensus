@@ -32,10 +32,8 @@ func TestControllerBasic(t *testing.T) {
 	log := basicLog.Sugar()
 	app := &mocks.ApplicationMock{}
 	app.On("Deliver", mock.Anything, mock.Anything)
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	pool := &mocks.RequestPool{}
-	pool.On("Close")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Restart", mock.Anything)
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMon.On("ChangeRole", mock.Anything, mock.Anything, mock.Anything)
 	leaderMon.On("Close")
@@ -49,8 +47,7 @@ func TestControllerBasic(t *testing.T) {
 
 	controller := &bft.Controller{
 		Checkpoint:    &types.Checkpoint{},
-		Batcher:       batcher,
-		RequestPool:   pool,
+		RequestsPool:  reqPool,
 		LeaderMonitor: leaderMon,
 		ID:            1, // not the leader
 		N:             4,
@@ -79,18 +76,15 @@ func TestControllerLeaderBasic(t *testing.T) {
 	basicLog, err := zap.NewDevelopment()
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcherChan := make(chan struct{})
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Restart", mock.Anything)
+	batchChan := make(chan struct{})
 	var once sync.Once
-	batcher.On("NextBatch").Run(func(args mock.Arguments) {
+	reqPool.On("NextRequests").Run(func(args mock.Arguments) {
 		once.Do(func() {
-			batcherChan <- struct{}{}
+			batchChan <- struct{}{}
 		})
 	}).Return([][]byte{})
-	pool := &mocks.RequestPool{}
-	pool.On("Close")
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMon.On("ChangeRole", bft.Leader, mock.Anything, mock.Anything)
 	leaderMon.On("Close")
@@ -105,13 +99,12 @@ func TestControllerLeaderBasic(t *testing.T) {
 	controller := &bft.Controller{
 		InFlight:      &bft.InFlightData{},
 		Checkpoint:    &types.Checkpoint{},
-		RequestPool:   pool,
+		RequestsPool:  reqPool,
 		LeaderMonitor: leaderMon,
 		ID:            2, // the leader
 		N:             4,
 		NodesList:     []uint64{1, 2, 3, 4},
 		Logger:        log,
-		Batcher:       batcher,
 		Comm:          commMock,
 		Verifier:      verifier,
 		StartedWG:     &startedWG,
@@ -119,9 +112,9 @@ func TestControllerLeaderBasic(t *testing.T) {
 	configureProposerBuilder(controller)
 
 	controller.Start(1, 0, 0, false)
-	<-batcherChan
+	<-batchChan
 	controller.Stop()
-	batcher.AssertCalled(t, "NextBatch")
+	reqPool.AssertCalled(t, "NextRequests")
 }
 
 func TestLeaderPropose(t *testing.T) {
@@ -129,13 +122,6 @@ func TestLeaderPropose(t *testing.T) {
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
 	req := []byte{1}
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcher.On("NextBatch").Return([][]byte{req}).Once()
-	batcher.On("NextBatch").Return([][]byte{req}).Once()
-	batcher.On("PopRemainder").Return([][]byte{})
-	batcher.On("BatchRemainder", mock.Anything)
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerifyRequest", req).Return(types.RequestInfo{}, nil)
@@ -171,9 +157,11 @@ func TestLeaderPropose(t *testing.T) {
 	app.On("Deliver", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		appWG.Done()
 	}).Return(types.Reconfig{InLatestDecision: false})
-	reqPool := &mocks.RequestPool{}
-	reqPool.On("Prune", mock.Anything)
-	reqPool.On("Close")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Restart", mock.Anything)
+	reqPool.On("NextRequests").Return([][]byte{req}).Once()
+	reqPool.On("NextRequests").Return([][]byte{req}).Once()
+	reqPool.On("RemoveRequests", mock.Anything)
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMon.On("ChangeRole", bft.Leader, mock.Anything, mock.Anything)
 	leaderMon.On("HeartbeatWasSent")
@@ -204,14 +192,13 @@ func TestLeaderPropose(t *testing.T) {
 
 	controller := &bft.Controller{
 		InFlight:      &bft.InFlightData{},
-		RequestPool:   reqPool,
+		RequestsPool:  reqPool,
 		LeaderMonitor: leaderMon,
 		WAL:           wal,
 		ID:            17, // the leader
 		N:             4,
 		NodesList:     []uint64{11, 17, 23, 37},
 		Logger:        log,
-		Batcher:       batcher,
 		Verifier:      verifier,
 		Assembler:     assembler,
 		Comm:          comm,
@@ -281,11 +268,6 @@ func TestViewChanged(t *testing.T) {
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
 	req := []byte{1}
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcher.On("Reset")
-	batcher.On("NextBatch").Return([][]byte{req})
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerificationSequence").Return(uint64(1))
@@ -304,9 +286,9 @@ func TestViewChanged(t *testing.T) {
 	comm.On("SendConsensus", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		commWG.Done()
 	})
-	reqPool := &mocks.RequestPool{}
-	reqPool.On("Prune", mock.Anything)
-	reqPool.On("Close")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("NextRequests").Return([][]byte{req})
+	reqPool.On("Restart", mock.Anything)
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMon.On("ChangeRole", bft.Follower, mock.Anything, mock.Anything)
 	leaderMon.On("ChangeRole", bft.Leader, mock.Anything, mock.Anything)
@@ -348,11 +330,10 @@ func TestViewChanged(t *testing.T) {
 		N:             4,
 		NodesList:     []uint64{1, 2, 3, 4},
 		Logger:        log,
-		Batcher:       batcher,
 		Verifier:      verifier,
 		Assembler:     assembler,
 		Comm:          comm,
-		RequestPool:   reqPool,
+		RequestsPool:  reqPool,
 		LeaderMonitor: leaderMon,
 		Synchronizer:  synchronizer,
 		Collector:     &collector,
@@ -367,7 +348,7 @@ func TestViewChanged(t *testing.T) {
 	commWG.Add(6) // propose
 	controller.ViewChanged(2, 0)
 	commWG.Wait()
-	batcher.AssertNumberOfCalls(t, "NextBatch", 1)
+	reqPool.AssertNumberOfCalls(t, "NextRequests", 1)
 	assembler.AssertNumberOfCalls(t, "AssembleProposal", 1)
 	comm.AssertNumberOfCalls(t, "SendConsensus", 9)
 	leaderMon.AssertCalled(t, "HeartbeatWasSent")
@@ -385,11 +366,9 @@ func TestSyncPrevView(t *testing.T) {
 	app.On("Deliver", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		appWG.Done()
 	}).Return(types.Reconfig{InLatestDecision: false})
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	pool := &mocks.RequestPool{}
-	pool.On("Close")
-	pool.On("Prune", mock.Anything)
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("RemoveRequests", mock.Anything)
+	reqPool.On("Restart", mock.Anything)
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMon.On("InjectArtificialHeartbeat", mock.Anything, mock.Anything)
 	leaderMonWG := sync.WaitGroup{}
@@ -446,8 +425,7 @@ func TestSyncPrevView(t *testing.T) {
 	controller := &bft.Controller{
 		Collector:       &collector,
 		InFlight:        &bft.InFlightData{},
-		Batcher:         batcher,
-		RequestPool:     pool,
+		RequestsPool:    reqPool,
 		LeaderMonitor:   leaderMon,
 		ID:              4, // not the leader
 		N:               4,
@@ -573,23 +551,18 @@ func TestControllerLeaderRequestHandling(t *testing.T) {
 
 			log := basicLog.Sugar()
 
-			batcher := &mocks.Batcher{}
-			batcher.On("Close")
-			batcher.On("Closed").Return(false)
-			batcher.On("Reset")
-			batcher.On("NextBatch").Run(func(arguments mock.Arguments) {
+			reqPool := &mocks.RequestsPool{}
+			reqPool.On("Restart", mock.Anything)
+			reqPool.On("NextRequests").Run(func(arguments mock.Arguments) {
 				time.Sleep(time.Hour)
 			})
-
-			pool := &mocks.RequestPool{}
-			pool.On("Close")
 			leaderMon := &mocks.LeaderMonitor{}
 			leaderMon.On("ChangeRole", bft.Follower, mock.Anything, mock.Anything)
 			leaderMon.On("ChangeRole", bft.Leader, mock.Anything, mock.Anything)
 			leaderMon.On("Close")
 			if testCase.shouldEnqueue {
 				submittedToPool.Add(1)
-				pool.On("Submit", mock.Anything).Return(nil).Run(func(_ mock.Arguments) {
+				reqPool.On("Submit", mock.Anything).Return(nil).Run(func(_ mock.Arguments) {
 					submittedToPool.Done()
 				})
 			}
@@ -622,13 +595,12 @@ func TestControllerLeaderRequestHandling(t *testing.T) {
 			controller := &bft.Controller{
 				InFlight:      &bft.InFlightData{},
 				Checkpoint:    &types.Checkpoint{},
-				RequestPool:   pool,
+				RequestsPool:  reqPool,
 				LeaderMonitor: leaderMon,
 				ID:            1,
 				N:             4,
 				NodesList:     []uint64{0, 1, 2, 3},
 				Logger:        log,
-				Batcher:       batcher,
 				Comm:          commMock,
 				Verifier:      verifier,
 				Synchronizer:  synchronizer,
@@ -694,11 +666,6 @@ func TestSyncInform(t *testing.T) {
 	assert.NoError(t, err)
 	log := basicLog.Sugar()
 	req := []byte{1}
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcher.On("Reset")
-	batcher.On("NextBatch").Return([][]byte{req})
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerificationSequence").Return(uint64(1))
@@ -734,8 +701,10 @@ func TestSyncInform(t *testing.T) {
 	})
 	commWithChan.On("Nodes").Return([]uint64{0, 1, 2, 3})
 
-	reqPool := &mocks.RequestPool{}
-	reqPool.On("Close")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("NextRequests").Return([][]byte{req})
+	reqPool.On("Halt")
+	reqPool.On("Restart", mock.Anything)
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMon.On("ChangeRole", bft.Follower, mock.Anything, mock.Anything)
 	leaderMon.On("ChangeRole", bft.Leader, mock.Anything, mock.Anything)
@@ -769,9 +738,6 @@ func TestSyncInform(t *testing.T) {
 		},
 	}, Reconfig: types.ReconfigSync{InReplicatedDecisions: false}})
 
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers")
-	reqTimer.On("RestartTimers")
 	controllerMock := &mocks.ViewController{}
 	controllerMock.On("AbortView", mock.Anything)
 
@@ -789,7 +755,7 @@ func TestSyncInform(t *testing.T) {
 		NodesList:           []uint64{0, 1, 2, 3},
 		Logger:              log,
 		Comm:                commWithChan,
-		RequestsTimer:       reqTimer,
+		RequestsPool:        reqPool,
 		Ticker:              make(chan time.Time),
 		Controller:          controllerMock,
 		InMsqQSize:          100,
@@ -807,11 +773,10 @@ func TestSyncInform(t *testing.T) {
 		N:             4,
 		NodesList:     []uint64{0, 1, 2, 3},
 		Logger:        log,
-		Batcher:       batcher,
 		Verifier:      verifier,
 		Assembler:     assembler,
 		Comm:          comm,
-		RequestPool:   reqPool,
+		RequestsPool:  reqPool,
 		LeaderMonitor: leaderMon,
 		Synchronizer:  synchronizer,
 		ViewChanger:   vc,
@@ -820,6 +785,8 @@ func TestSyncInform(t *testing.T) {
 		StartedWG:     &vc.ControllerStartedWG,
 	}
 	configureProposerBuilder(controller)
+
+	vc.Checkpoint = controller.Checkpoint
 
 	controller.Checkpoint.Set(proposal, []types.Signature{{ID: 1}, {ID: 2}, {ID: 3}})
 
@@ -836,7 +803,7 @@ func TestSyncInform(t *testing.T) {
 	assert.NotNil(t, msg.GetViewChange())
 	assert.Equal(t, syncToView+1, msg.GetViewChange().NextView) // view number did change according to info
 
-	batcher.AssertNumberOfCalls(t, "NextBatch", 1)
+	reqPool.AssertNumberOfCalls(t, "NextRequests", 1)
 	assembler.AssertNumberOfCalls(t, "AssembleProposal", 1)
 	comm.AssertNumberOfCalls(t, "SendConsensus", 9)
 	leaderMon.AssertCalled(t, "HeartbeatWasSent")
@@ -859,14 +826,15 @@ func TestRotateFromLeaderToFollower(t *testing.T) {
 	assert.NoError(t, err)
 	defer wal.Close()
 
-	var restartTimersWG sync.WaitGroup
-	restartTimersWG.Add(2)
-	reqPool := &mocks.RequestPool{}
-	reqPool.On("RestartTimers").Run(func(args mock.Arguments) {
-		restartTimersWG.Done()
+	var restartPoolWG sync.WaitGroup
+	restartPoolWG.Add(3)
+	reqPool := &mocks.RequestsPool{}
+	req := []byte{1}
+	reqPool.On("NextRequests").Return([][]byte{req})
+	reqPool.On("Restart", mock.Anything).Run(func(args mock.Arguments) {
+		restartPoolWG.Done()
 	})
-	reqPool.On("Prune", mock.Anything)
-	reqPool.On("Close")
+	reqPool.On("RemoveRequests", mock.Anything)
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMon.On("ChangeRole", bft.Leader, mock.Anything, mock.Anything)
 	leaderMonWG := sync.WaitGroup{}
@@ -876,13 +844,7 @@ func TestRotateFromLeaderToFollower(t *testing.T) {
 	leaderMon.On("HeartbeatWasSent")
 	leaderMon.On("InjectArtificialHeartbeat", uint64(3), mock.Anything)
 	leaderMon.On("Close")
-	req := []byte{1}
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Closed").Return(false)
-	batcher.On("NextBatch").Return([][]byte{req}).Once()
-	batcher.On("PopRemainder").Return([][]byte{})
-	batcher.On("BatchRemainder", mock.Anything)
+
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerifyRequest", req).Return(types.RequestInfo{}, nil)
@@ -917,14 +879,13 @@ func TestRotateFromLeaderToFollower(t *testing.T) {
 
 	controller := &bft.Controller{
 		InFlight:           &bft.InFlightData{},
-		RequestPool:        reqPool,
+		RequestsPool:       reqPool,
 		LeaderMonitor:      leaderMon,
 		WAL:                wal,
 		ID:                 2, // the first leader
 		N:                  4,
 		NodesList:          []uint64{1, 2, 3, 4},
 		Logger:             log,
-		Batcher:            batcher,
 		Verifier:           verifier,
 		Assembler:          assembler,
 		Comm:               comm,
@@ -1001,7 +962,7 @@ func TestRotateFromLeaderToFollower(t *testing.T) {
 	controller.ProcessMessages(1, commit1Next)
 	controller.ProcessMessages(3, commit3Next)
 	leaderMonWG.Wait()
-	restartTimersWG.Wait()
+	restartPoolWG.Wait()
 	appWG.Wait()
 	app.AssertNumberOfCalls(t, "Deliver", 2)
 
@@ -1020,13 +981,14 @@ func TestRotateFromFollowerToLeader(t *testing.T) {
 	assert.NoError(t, err)
 	defer wal.Close()
 
-	var restartTimersWG sync.WaitGroup
-	restartTimersWG.Add(2)
-	reqPool := &mocks.RequestPool{}
-	reqPool.On("Prune", mock.Anything)
-	reqPool.On("Close")
-	reqPool.On("RestartTimers").Run(func(args mock.Arguments) {
-		restartTimersWG.Done()
+	var restartPoolWG sync.WaitGroup
+	restartPoolWG.Add(3)
+	reqPool := &mocks.RequestsPool{}
+	req := []byte{1}
+	reqPool.On("NextRequests").Return([][]byte{req}).Once()
+	reqPool.On("RemoveRequests", mock.Anything)
+	reqPool.On("Restart", mock.Anything).Run(func(args mock.Arguments) {
+		restartPoolWG.Done()
 	})
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMonWG := sync.WaitGroup{}
@@ -1040,14 +1002,7 @@ func TestRotateFromFollowerToLeader(t *testing.T) {
 	leaderMon.On("HeartbeatWasSent")
 	leaderMon.On("InjectArtificialHeartbeat", uint64(2), mock.Anything)
 	leaderMon.On("Close")
-	req := []byte{1}
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
-	batcher.On("Reset")
-	batcher.On("Closed").Return(false)
-	batcher.On("NextBatch").Return([][]byte{req}).Once()
-	batcher.On("PopRemainder").Return([][]byte{})
-	batcher.On("BatchRemainder", mock.Anything)
+
 	verifier := &mocks.VerifierMock{}
 	verifier.On("VerifySignature", mock.Anything).Return(nil)
 	verifier.On("VerifyRequest", req).Return(types.RequestInfo{}, nil)
@@ -1100,14 +1055,13 @@ func TestRotateFromFollowerToLeader(t *testing.T) {
 
 	controller := &bft.Controller{
 		InFlight:           &bft.InFlightData{},
-		RequestPool:        reqPool,
+		RequestsPool:       reqPool,
 		LeaderMonitor:      leaderMon,
 		WAL:                wal,
 		ID:                 3, // the second leader
 		N:                  4,
 		NodesList:          []uint64{1, 2, 3, 4},
 		Logger:             log,
-		Batcher:            batcher,
 		Verifier:           verifier,
 		Assembler:          assembler,
 		Comm:               comm,
@@ -1172,7 +1126,7 @@ func TestRotateFromFollowerToLeader(t *testing.T) {
 	controller.ProcessMessages(1, commit1Next)
 	controller.ProcessMessages(2, commit2Next)
 	followerMonWG.Wait()
-	restartTimersWG.Wait()
+	restartPoolWG.Wait()
 	appWG.Wait()
 	app.AssertNumberOfCalls(t, "Deliver", 2)
 
@@ -1207,10 +1161,6 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		commSendWG.Done()
 	})
 
-	reqTimer := &mocks.RequestsTimer{}
-	reqTimer.On("StopTimers")
-	reqTimer.On("RestartTimers")
-
 	ticker := make(chan time.Time)
 
 	signer := &mocks.SignerMock{}
@@ -1219,9 +1169,6 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		ID:    4,
 		Value: []byte{4},
 	})
-
-	batcher := &mocks.Batcher{}
-	batcher.On("Close")
 
 	state := &mocks.State{}
 	state.On("Save", mock.Anything).Return(nil)
@@ -1239,8 +1186,9 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 
 	assembler := &mocks.AssemblerMock{}
 
-	reqPool := &mocks.RequestPool{}
-	reqPool.On("Close")
+	reqPool := &mocks.RequestsPool{}
+	reqPool.On("Halt")
+	reqPool.On("Restart", mock.Anything)
 
 	leaderMon := &mocks.LeaderMonitor{}
 	leaderMonWG := sync.WaitGroup{}
@@ -1314,7 +1262,7 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		Application:       app,
 		Verifier:          verifier,
 		Signer:            signer,
-		RequestsTimer:     reqTimer,
+		RequestsPool:      reqPool,
 		State:             state,
 		InFlight:          &bft.InFlightData{},
 		Ticker:            ticker,
@@ -1335,11 +1283,10 @@ func TestDeliverTwiceOnceFromSyncAndOnceFromViewData(t *testing.T) {
 		N:             7,
 		NodesList:     []uint64{1, 2, 3, 4, 5, 6, 7},
 		Logger:        log,
-		Batcher:       batcher,
 		Verifier:      verifier,
 		Assembler:     assembler,
 		Comm:          comm,
-		RequestPool:   reqPool,
+		RequestsPool:  reqPool,
 		LeaderMonitor: leaderMon,
 		Synchronizer:  synchronizer,
 		ViewChanger:   vc,

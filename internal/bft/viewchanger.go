@@ -72,9 +72,9 @@ type ViewChanger struct {
 	InFlight   *InFlightData
 	State      State
 
-	Controller    ViewController
-	RequestsTimer RequestsTimer
-	Pruner        Pruner
+	Controller   ViewController
+	RequestsPool RequestsPool
+	Pruner       Pruner
 
 	// for the in flight proposal view
 	ViewSequences      *atomic.Value
@@ -350,7 +350,6 @@ func (v *ViewChanger) informNewView(view uint64) {
 	v.viewDataMsgs.clear(v.N)
 	v.checkTimeout = false
 	v.backOffFactor = 1 // reset
-	v.RequestsTimer.RestartTimers()
 }
 
 // StartViewChange initiates a view change
@@ -374,7 +373,7 @@ func (v *ViewChanger) startViewChange(change *change) {
 	}
 	v.nextView = v.currView + 1
 	v.MetricsViewChange.NextView.Set(float64(v.nextView))
-	v.RequestsTimer.StopTimers()
+	v.RequestsPool.Halt()
 	msg := &protos.Message{
 		Content: &protos.Message_ViewChange{
 			ViewChange: &protos.ViewChange{
@@ -1162,8 +1161,6 @@ func (v *ViewChanger) processNewViewMsg(msg *protos.NewView) {
 	v.MetricsViewChange.RealView.Set(float64(v.realView))
 	v.nvs.clear()
 	v.Controller.ViewChanged(v.currView, mySequence+1)
-
-	v.RequestsTimer.RestartTimers()
 	v.checkTimeout = false
 	v.backOffFactor = 1 // reset
 }
@@ -1180,11 +1177,11 @@ func (v *ViewChanger) deliverDecision(proposal types.Proposal, signatures []type
 	}
 	v.Logger.Debugf("Delivering end to app from deliverDecision the last decision proposal")
 	requests := v.Verifier.RequestsFromProposal(proposal)
+	ids := make([]string, 0, len(requests))
 	for _, reqInfo := range requests {
-		if err := v.RequestsTimer.RemoveRequest(reqInfo); err != nil {
-			v.Logger.Warnf("Error during remove of request %s from the pool, err: %v", reqInfo, err)
-		}
+		ids = append(ids, reqInfo.ID)
 	}
+	v.RequestsPool.RemoveRequests(ids...)
 	v.Pruner.MaybePruneRevokedRequests()
 }
 
@@ -1336,11 +1333,11 @@ func (v *ViewChanger) Decide(proposal types.Proposal, signatures []types.Signatu
 		v.Checkpoint.Set(proposal, signatures)
 	}
 	v.Logger.Debugf("Delivering end to app from Decide the last decision proposal")
+	ids := make([]string, 0, len(requests))
 	for _, reqInfo := range requests {
-		if err := v.RequestsTimer.RemoveRequest(reqInfo); err != nil {
-			v.Logger.Warnf("Error during remove of request %s from the pool, err: %v", reqInfo, err)
-		}
+		ids = append(ids, reqInfo.ID)
 	}
+	v.RequestsPool.RemoveRequests(ids...)
 	v.Pruner.MaybePruneRevokedRequests()
 
 	select {
