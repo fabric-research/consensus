@@ -26,53 +26,38 @@ type BatchStore struct {
 const sizeBytesOffset = 32
 
 type batch struct {
-	lock sync.RWMutex
 	// use one uint64 var to represent both the size and the size in bytes of a batch
 	// and increment both using one atomic operation.
 	sizeBytes uint64
-	enqueued  bool
+	enqueued  uint32
 	m         sync.Map
 }
 
 func (b *batch) Load(key any) (value any, ok bool) {
-	b.lock.RLock()
-	defer b.lock.RUnlock()
 	return b.m.Load(key)
 }
 
 func (b *batch) isEnqueued() bool {
-	b.lock.RLock()
-	defer b.lock.RUnlock()
-	return b.enqueued
+	return atomic.LoadUint32(&b.enqueued) == 1
 }
 
 func (b *batch) markEnqueued() {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-	b.enqueued = true
+	atomic.StoreUint32(&b.enqueued, 1)
 }
 
 func (b *batch) Store(key, value any) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
 	b.m.Store(key, value)
 }
 
 func (b *batch) Range(f func(key, value any) bool) {
-	b.lock.RLock()
-	defer b.lock.RUnlock()
 	b.m.Range(f)
 }
 
 func (b *batch) Delete(key any) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
 	b.m.Delete(key)
 }
 
 func (b *batch) Prune(f func(key, value any) error) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
 	delFunc := func(key, value any) bool {
 		if f(key, value) != nil {
 			b.m.Delete(key)
