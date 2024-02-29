@@ -104,10 +104,6 @@ func (c *Consensus) GetLeaderID() uint64 {
 	return c.controller.GetLeaderID()
 }
 
-func (c *Consensus) RequestID(req []byte) string {
-	return c.RequestInspector.RequestID(req).ID
-}
-
 func (c *Consensus) Start() error {
 	if err := c.ValidateConfiguration(c.Comm.Nodes()); err != nil {
 		return errors.Wrapf(err, "configuration is invalid")
@@ -142,7 +138,7 @@ func (c *Consensus) Start() error {
 	c.createComponents()
 
 	// TODO use request pool metrics
-	c.Pool = request.NewPool(c.Logger, c, c.createPoolOpts())
+	c.Pool = request.NewPool(c.Logger, &request.OnlyIDRequestInspector{RequestInspector: c.RequestInspector}, c.createPoolOpts())
 	c.controller.RequestsPool = c.Pool
 	c.viewChanger.RequestsPool = c.Pool
 
